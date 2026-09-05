@@ -456,6 +456,11 @@ async function loadOrCreateConfig(configPath) {
 
   try {
     const rawData = await fs.readFile(normalizedPath, 'utf-8');
+    if (!rawData.trim()) {
+      const initialConfig = { mcpServers: {} };
+      await fs.writeFile(normalizedPath, JSON.stringify(initialConfig, null, 2) + '\n', 'utf-8');
+      return initialConfig;
+    }
     const parsed = JSON.parse(rawData);
 
     if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
@@ -475,7 +480,12 @@ async function loadOrCreateConfig(configPath) {
     }
 
     if (err instanceof SyntaxError) {
-      throw new Error(`Corrupted JSON in ${normalizedPath}: ${err.message}`);
+      const backupPath = `${normalizedPath}.corrupted.${Date.now()}.bak`;
+      try { await fs.copyFile(normalizedPath, backupPath); } catch {}
+      console.log(pc.yellow(`\nNotice: Corrupted JSON detected in ${normalizedPath}. Backed up to ${backupPath} and initialized clean config.`));
+      const initialConfig = { mcpServers: {} };
+      await fs.writeFile(normalizedPath, JSON.stringify(initialConfig, null, 2) + '\n', 'utf-8');
+      return initialConfig;
     }
 
     if (err.code === 'EACCES') {
