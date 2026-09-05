@@ -26,11 +26,20 @@ const FORBIDDEN_SERVER_KEYS = new Set(['__proto__', 'constructor', 'prototype'])
 // Sentinel value to identify when user requests to go back
 const BACK_SIGNAL = Symbol('BACK_SIGNAL');
 
+// Handle Ctrl+C (SIGINT) cleanly across all execution environments
+function handleExit() {
+  console.log(pc.yellow('\n\nOperación cancelada por el usuario.'));
+  process.exit(0);
+}
+
+process.on('SIGINT', handleExit);
+process.on('SIGTERM', () => process.exit(0));
+
 function printBanner() {
   console.log();
   console.log(pc.bold(pc.cyan('antigravity-mcp-installer')) + pc.dim(' (agy-mcp)'));
   console.log(pc.dim('Search, audit risk & configure MCP servers for Antigravity CLI'));
-  console.log(pc.dim('Tip: Press [Esc] at any menu to go back.'));
+  console.log(pc.dim('Tip: Press [Esc] to go back, or [Ctrl+C] to exit.'));
   console.log();
 }
 
@@ -64,15 +73,20 @@ function runCommand(command, args = []) {
 }
 
 /**
- * Inquirer wrapper with Escape key listener for backward navigation
+ * Inquirer wrapper with Escape key for backward navigation & strict Ctrl+C exit
  */
 async function promptWithEsc(questionOrQuestions, allowEsc = true) {
   const promptPromise = inquirer.prompt(questionOrQuestions);
   let keyHandler;
 
-  if (allowEsc && promptPromise.ui?.abortController) {
+  if (promptPromise.ui?.abortController) {
     keyHandler = (str, key) => {
-      if (key && (key.name === 'escape' || key.sequence === '\u001b')) {
+      // Immediate exit on Ctrl+C
+      if (key && key.ctrl && key.name === 'c') {
+        handleExit();
+      }
+      // Step back on Escape
+      if (allowEsc && key && (key.name === 'escape' || key.sequence === '\u001b')) {
         promptPromise.ui.abortController.abort(BACK_SIGNAL);
       }
     };
@@ -82,9 +96,15 @@ async function promptWithEsc(questionOrQuestions, allowEsc = true) {
   try {
     return await promptPromise;
   } catch (err) {
-    if (err.name === 'AbortPromptError' || promptPromise.ui?.abortController?.signal?.aborted) {
+    if (err.name === 'ExitPromptError') {
+      handleExit();
+    }
+
+    // Only return BACK_SIGNAL if specifically aborted by Escape key
+    if (promptPromise.ui?.abortController?.signal?.reason === BACK_SIGNAL) {
       return BACK_SIGNAL;
     }
+
     throw err;
   } finally {
     if (keyHandler) {
@@ -294,7 +314,6 @@ async function searchNpmMcpServers(searchTerm) {
       return matchesTerm && isMcp;
     });
 
-    // If strict filter yields 0 results (unusual query), fallback to all valid results that mention MCP
     const pool = candidates.length > 0 ? candidates : data.objects.filter(item => {
       const pkg = item.package;
       if (!pkg?.name || !VALID_NPM_PACKAGE_NAME.test(pkg.name)) return false;
@@ -305,7 +324,6 @@ async function searchNpmMcpServers(searchTerm) {
     });
 
     // 2. RELEVANCE + POPULARITY RANKING
-    // Ensures packages matching the search term stay at the top, ranked by downloads among peers
     function computeRank(item) {
       const pkg = item.package;
       const name = (pkg.name || '').toLowerCase();
@@ -315,24 +333,16 @@ async function searchNpmMcpServers(searchTerm) {
 
       let score = 0;
 
-      // Tier 1: Package name explicitly contains both search term and 'mcp'
       if (name.includes(lowerTerm) && name.includes('mcp')) {
         score += 10000000;
-      }
-      // Tier 2: Package name explicitly contains search term
-      else if (name.includes(lowerTerm)) {
+      } else if (name.includes(lowerTerm)) {
         score += 5000000;
-      }
-      // Tier 3: Keywords array explicitly contains search term
-      else if (keywords.some(k => k.includes(lowerTerm))) {
+      } else if (keywords.some(k => k.includes(lowerTerm))) {
         score += 2000000;
-      }
-      // Tier 4: Description contains search term
-      else if (desc.includes(lowerTerm)) {
+      } else if (desc.includes(lowerTerm)) {
         score += 1000000;
       }
 
-      // Add popularity within the relevance tier
       score += weekly;
       return score;
     }
@@ -443,7 +453,7 @@ async function main() {
     .name('antigravity-mcp-installer')
     .alias('agy-mcp')
     .description('Interactive MCP server installer with risk audit and smart relevance ranking')
-    .version('1.2.1')
+    .version('1.2.2')
     .argument('[query]', 'Search term (e.g. filesystem, postgres, sqlite)')
     .option('-c, --config <path>', 'Explicit path to mcp_config.json')
     .parse(process.argv);
@@ -744,10 +754,5 @@ async function main() {
 }
 
 main().catch(err => {
-  if (err.name === 'ExitPromptError') {
-    console.log(pc.yellow('\nOperación cancelada.'));
-    process.exit(0);
-  }
-  console.error(pc.red(`\nFatal: ${err.message}`));
-  process.exit(1);
+  handleExit();
 });
