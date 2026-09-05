@@ -1,6 +1,6 @@
 {
   "name": "antigravity-mcp-installer",
-  "version": "1.5.0",
+  "version": "1.5.1",
   "description": "Interactive CLI to search, explain, security-audit, and configure MCP servers for Antigravity CLI",
   "type": "module",
   "bin": {

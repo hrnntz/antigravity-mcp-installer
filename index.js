@@ -547,170 +547,180 @@ async function searchNpmMcpServers(searchTerm) {
 }
 
 /**
- * Manage existing MCP servers module
+ * Manage existing MCP servers module with full Esc back navigation
  */
 async function manageExistingServers(explicitPath = null) {
-  let scopePath = explicitPath;
-
-  if (!scopePath) {
-    const scopeAns = await promptWithEsc([
-      {
-        type: 'list',
-        name: 'scope',
-        message: 'Select configuration scope to manage:',
-        choices: [
-          {
-            name: `${pc.bold('Global')} ${pc.dim(`(${GLOBAL_CONFIG_PATH})`)}`,
-            value: GLOBAL_CONFIG_PATH
-          },
-          {
-            name: `${pc.bold('Local / Project')} ${pc.dim(`(${LOCAL_CONFIG_PATH})`)}`,
-            value: LOCAL_CONFIG_PATH
-          },
-          new inquirer.Separator(),
-          {
-            name: pc.dim('← [Esc] Back to main menu'),
-            value: BACK_SIGNAL
-          }
-        ]
-      }
-    ]);
-
-    if (scopeAns === BACK_SIGNAL || scopeAns.scope === BACK_SIGNAL) {
-      return;
-    }
-    scopePath = scopeAns.scope;
-  }
+  let manageScope = explicitPath;
 
   while (true) {
-    const configData = await loadOrCreateConfig(scopePath);
-    const serverKeys = Object.keys(configData.mcpServers || {});
-
-    if (serverKeys.length === 0) {
-      console.log(pc.yellow(`\nNo MCP servers configured in ${scopePath}.\n`));
-      return;
-    }
-
-    // Run quick vulnerability check on configured servers
-    const spinner = ora({
-      text: `Auditing vulnerabilities for ${serverKeys.length} server(s) in ${path.basename(scopePath)}...`,
-      color: 'cyan'
-    }).start();
-
-    const auditResults = {};
-    await Promise.all(
-      serverKeys.map(async key => {
-        const server = configData.mcpServers[key];
-        const pkgName = getPackageNameFromConfig(server);
-        const osv = await queryOsvVulnerabilities(pkgName);
-        auditResults[key] = { pkgName, vulns: osv.vulns, activeVulns: osv.activeVulns };
-      })
-    );
-    spinner.stop();
-
-    const choices = serverKeys.map(key => {
-      const s = configData.mcpServers[key];
-      const audit = auditResults[key];
-      const cmdPreview = `${s.command || ''} ${(s.args || []).join(' ')}`.trim();
-      
-      let badge = pc.green('[🟢 Safe]');
-      if (audit.activeVulns.length > 0) {
-        badge = pc.bold(pc.red(`[🔴 ${audit.activeVulns.length} CVEs!]`));
-      }
-
-      return {
-        name: `${pc.bold(key)} ${badge} ${pc.dim(`(${cmdPreview})`)}`,
-        value: key
-      };
-    });
-
-    choices.push(new inquirer.Separator());
-    choices.push({
-      name: pc.dim('← [Esc] Back'),
-      value: BACK_SIGNAL
-    });
-
-    const selectAns = await promptWithEsc([
-      {
-        type: 'list',
-        name: 'serverKey',
-        message: `Configured MCP servers in ${pc.cyan(scopePath)} (${serverKeys.length}):`,
-        choices,
-        pageSize: 12
-      }
-    ]);
-
-    if (selectAns === BACK_SIGNAL || selectAns.serverKey === BACK_SIGNAL) {
-      return;
-    }
-
-    const key = selectAns.serverKey;
-    const serverConfig = configData.mcpServers[key];
-    const audit = auditResults[key];
-
-    // Server details inspection card
-    console.log();
-    console.log(pc.bold(pc.cyan('═'.repeat(68))));
-    console.log(` ⚙️  MCP Server: ${pc.bold(pc.green(key))}`);
-    console.log(pc.bold(pc.cyan('─'.repeat(68))));
-    console.log(`  • Config File : ${pc.white(scopePath)}`);
-    console.log(`  • Command     : ${pc.white(serverConfig.command || 'none')}`);
-    console.log(`  • Arguments   : ${pc.white(JSON.stringify(serverConfig.args || []))}`);
-    if (serverConfig.env) {
-      console.log(`  • Environment : ${pc.white(JSON.stringify(serverConfig.env))}`);
-    }
-    console.log(`  • Package     : ${pc.cyan(audit.pkgName || 'custom')}`);
-    console.log(pc.bold(pc.cyan('─'.repeat(68))));
-
-    if (audit.activeVulns.length > 0) {
-      console.log(pc.red(` ⚠ Security Vulnerabilities (${audit.activeVulns.length}):`));
-      audit.activeVulns.forEach(v => console.log(pc.red(`    • ${v}`)));
-    } else {
-      console.log(pc.green(` ✔ Security Status: No active CVEs reported in Google OSV database.`));
-    }
-    console.log(pc.bold(pc.cyan('═'.repeat(68))));
-    console.log();
-
-    const actionAns = await promptWithEsc([
-      {
-        type: 'list',
-        name: 'action',
-        message: `Manage "${key}":`,
-        choices: [
-          {
-            name: `${pc.bold(pc.red('🗑️  Remove server'))} ${pc.dim('(Delete from configuration)')}`,
-            value: 'remove'
-          },
-          {
-            name: pc.dim('← [Esc] Back to servers list'),
-            value: BACK_SIGNAL
-          }
-        ]
-      }
-    ]);
-
-    if (actionAns === BACK_SIGNAL || actionAns.action === BACK_SIGNAL) {
-      continue;
-    }
-
-    if (actionAns.action === 'remove') {
-      const confirmAns = await promptWithEsc([
+    // 1. If scope not explicitly provided via CLI flag, ask for scope
+    if (!explicitPath) {
+      const scopeAns = await promptWithEsc([
         {
-          type: 'confirm',
-          name: 'confirmRemove',
-          message: `Are you sure you want to delete "${key}" from ${scopePath}?`,
-          default: false
+          type: 'list',
+          name: 'scope',
+          message: 'Select configuration scope to manage:',
+          choices: [
+            {
+              name: `${pc.bold('Global')} ${pc.dim(`(${GLOBAL_CONFIG_PATH})`)}`,
+              value: GLOBAL_CONFIG_PATH
+            },
+            {
+              name: `${pc.bold('Local / Project')} ${pc.dim(`(${LOCAL_CONFIG_PATH})`)}`,
+              value: LOCAL_CONFIG_PATH
+            },
+            new inquirer.Separator(),
+            {
+              name: pc.dim('← [Esc] Back to main menu'),
+              value: BACK_SIGNAL
+            }
+          ]
         }
       ]);
 
-      if (confirmAns !== BACK_SIGNAL && confirmAns.confirmRemove) {
-        delete configData.mcpServers[key];
-        await saveConfig(scopePath, configData);
-        console.log(pc.green(`\n✔ Server "${key}" was successfully removed from ${scopePath}.\n`));
+      if (scopeAns === BACK_SIGNAL || scopeAns.scope === BACK_SIGNAL) {
+        return; // Returns to main menu loop
+      }
+      manageScope = scopeAns.scope;
+    }
+
+    // 2. Loop through servers in the selected scope
+    let inScopeLoop = true;
+    while (inScopeLoop) {
+      const configData = await loadOrCreateConfig(manageScope);
+      const serverKeys = Object.keys(configData.mcpServers || {});
+
+      if (serverKeys.length === 0) {
+        console.log(pc.yellow(`\nNo MCP servers configured in ${manageScope}.\n`));
+        if (explicitPath) return;
+        inScopeLoop = false;
+        break; // Return to scope selection
+      }
+
+      const spinner = ora({
+        text: `Auditing vulnerabilities for ${serverKeys.length} server(s) in ${path.basename(manageScope)}...`,
+        color: 'cyan'
+      }).start();
+
+      const auditResults = {};
+      await Promise.all(
+        serverKeys.map(async key => {
+          const server = configData.mcpServers[key];
+          const pkgName = getPackageNameFromConfig(server);
+          const osv = await queryOsvVulnerabilities(pkgName);
+          auditResults[key] = { pkgName, vulns: osv.vulns, activeVulns: osv.activeVulns };
+        })
+      );
+      spinner.stop();
+
+      const choices = serverKeys.map(key => {
+        const s = configData.mcpServers[key];
+        const audit = auditResults[key];
+        const cmdPreview = `${s.command || ''} ${(s.args || []).join(' ')}`.trim();
+        
+        let badge = pc.green('[🟢 Safe]');
+        if (audit.activeVulns.length > 0) {
+          badge = pc.bold(pc.red(`[🔴 ${audit.activeVulns.length} CVEs!]`));
+        }
+
+        return {
+          name: `${pc.bold(key)} ${badge} ${pc.dim(`(${cmdPreview})`)}`,
+          value: key
+        };
+      });
+
+      choices.push(new inquirer.Separator());
+      choices.push({
+        name: pc.dim(explicitPath ? '← [Esc] Exit' : '← [Esc] Back to scope selection'),
+        value: BACK_SIGNAL
+      });
+
+      const selectAns = await promptWithEsc([
+        {
+          type: 'list',
+          name: 'serverKey',
+          message: `Configured MCP servers in ${pc.cyan(manageScope)} (${serverKeys.length}):`,
+          choices,
+          pageSize: 12
+        }
+      ]);
+
+      if (selectAns === BACK_SIGNAL || selectAns.serverKey === BACK_SIGNAL) {
+        if (explicitPath) return;
+        inScopeLoop = false;
+        break; // Return to scope selection
+      }
+
+      const key = selectAns.serverKey;
+      const serverConfig = configData.mcpServers[key];
+      const audit = auditResults[key];
+
+      // Inspection card
+      console.log();
+      console.log(pc.bold(pc.cyan('═'.repeat(68))));
+      console.log(` ⚙️  MCP Server: ${pc.bold(pc.green(key))}`);
+      console.log(pc.bold(pc.cyan('─'.repeat(68))));
+      console.log(`  • Config File : ${pc.white(manageScope)}`);
+      console.log(`  • Command     : ${pc.white(serverConfig.command || 'none')}`);
+      console.log(`  • Arguments   : ${pc.white(JSON.stringify(serverConfig.args || []))}`);
+      if (serverConfig.env) {
+        console.log(`  • Environment : ${pc.white(JSON.stringify(serverConfig.env))}`);
+      }
+      console.log(`  • Package     : ${pc.cyan(audit.pkgName || 'custom')}`);
+      console.log(pc.bold(pc.cyan('─'.repeat(68))));
+
+      if (audit.activeVulns.length > 0) {
+        console.log(pc.red(` ⚠ Security Vulnerabilities (${audit.activeVulns.length}):`));
+        audit.activeVulns.forEach(v => console.log(pc.red(`    • ${v}`)));
       } else {
-        console.log(pc.yellow('\nRemoval cancelled.\n'));
+        console.log(pc.green(` ✔ Security Status: No active CVEs reported in Google OSV database.`));
+      }
+      console.log(pc.bold(pc.cyan('═'.repeat(68))));
+      console.log();
+
+      const actionAns = await promptWithEsc([
+        {
+          type: 'list',
+          name: 'action',
+          message: `Manage "${key}":`,
+          choices: [
+            {
+              name: `${pc.bold(pc.red('🗑️  Remove server'))} ${pc.dim('(Delete from configuration)')}`,
+              value: 'remove'
+            },
+            {
+              name: pc.dim('← [Esc] Back to servers list'),
+              value: BACK_SIGNAL
+            }
+          ]
+        }
+      ]);
+
+      if (actionAns === BACK_SIGNAL || actionAns.action === BACK_SIGNAL) {
+        continue; // Stays in server list loop
+      }
+
+      if (actionAns.action === 'remove') {
+        const confirmAns = await promptWithEsc([
+          {
+            type: 'confirm',
+            name: 'confirmRemove',
+            message: `Are you sure you want to delete "${key}" from ${manageScope}?`,
+            default: false
+          }
+        ]);
+
+        if (confirmAns !== BACK_SIGNAL && confirmAns.confirmRemove) {
+          delete configData.mcpServers[key];
+          await saveConfig(manageScope, configData);
+          console.log(pc.green(`\n✔ Server "${key}" was successfully removed from ${manageScope}.\n`));
+        } else {
+          console.log(pc.yellow('\nRemoval cancelled.\n'));
+        }
       }
     }
+
+    if (explicitPath) return;
   }
 }
 
@@ -765,89 +775,24 @@ async function auditAllInstalledServers() {
       console.log(pc.bold(pc.red(`Audit complete: Found ${totalIssues} active vulnerability notices across ${totalScanned} servers.\n`)));
     }
   }
+
+  // Allow user to return to menu cleanly
+  await promptWithEsc([
+    {
+      type: 'list',
+      name: 'continue',
+      message: 'Audit complete. Return to main menu?',
+      choices: [{ name: '← [Esc / Enter] Back to main menu', value: true }]
+    }
+  ]);
 }
 
 /**
- * Main flow
+ * Search and Install Wizard
  */
-async function main() {
-  const program = new Command();
-
-  program
-    .name('antigravity-mcp-installer')
-    .alias('agy-mcp')
-    .description('Interactive MCP server installer & manager for Antigravity CLI')
-    .version('1.5.0')
-    .argument('[query]', 'Search term to install a server (e.g. filesystem, postgres, github)')
-    .option('-c, --config <path>', 'Custom path to mcp_config.json')
-    .option('-m, --manage', 'Open MCP server management menu directly')
-    .option('-l, --list', 'List installed servers directly')
-    .option('-a, --audit', 'Audit all installed servers for vulnerabilities')
-    .parse(process.argv);
-
-  const options = program.opts();
-  const explicitConfigPath = options.config ? path.resolve(options.config) : null;
-  let initialArgQuery = program.args[0] || '';
-
-  printBanner();
-
-  if (options.audit) {
-    await auditAllInstalledServers();
-    return;
-  }
-
-  if (options.manage || options.list) {
-    await manageExistingServers(explicitConfigPath);
-    return;
-  }
-
-  // If no query passed, show main action menu
-  if (!initialArgQuery) {
-    const mainActionAns = await promptWithEsc([
-      {
-        type: 'list',
-        name: 'action',
-        message: 'What would you like to do?',
-        choices: [
-          {
-            name: `${pc.bold('🔍 Search & Install')} ${pc.dim('(Discover MCP servers on npm and configure)')}`,
-            value: 'search'
-          },
-          {
-            name: `${pc.bold('📋 Manage Installed Servers')} ${pc.dim('(Inspect, audit vulnerabilities, or remove)')}`,
-            value: 'manage'
-          },
-          {
-            name: `${pc.bold('🛡️  Run Security Audit')} ${pc.dim('(Scan all configured servers for CVEs)')}`,
-            value: 'audit'
-          },
-          new inquirer.Separator(),
-          {
-            name: pc.dim('❌ Exit'),
-            value: 'exit'
-          }
-        ]
-      }
-    ], false);
-
-    if (mainActionAns.action === 'manage') {
-      await manageExistingServers(explicitConfigPath);
-      return;
-    }
-
-    if (mainActionAns.action === 'audit') {
-      await auditAllInstalledServers();
-      return;
-    }
-
-    if (mainActionAns.action === 'exit' || !mainActionAns.action) {
-      process.exit(0);
-    }
-  }
-
-  // Search and Install Wizard
+async function runSearchAndInstallWizard(initialQuery = '', explicitConfigPath = null) {
   let state = 'SEARCH';
-  let query = initialArgQuery;
+  let query = initialQuery;
   let packages = [];
   let selectedPkg = null;
   let security = null;
@@ -866,7 +811,11 @@ async function main() {
               message: 'What MCP server are you looking for? (e.g. github, postgres, filesystem):',
               validate: input => input.trim().length > 0 ? true : 'Please enter a search term.'
             }
-          ], false);
+          ], true);
+
+          if (ans === BACK_SIGNAL) {
+            return; // Returns to main menu
+          }
 
           query = ans.query;
         }
@@ -1136,6 +1085,90 @@ async function main() {
         }
         break;
       }
+    }
+  }
+}
+
+/**
+ * Main application loop
+ */
+async function main() {
+  const program = new Command();
+
+  program
+    .name('antigravity-mcp-installer')
+    .alias('agy-mcp')
+    .description('Interactive MCP server installer & manager for Antigravity CLI')
+    .version('1.5.1')
+    .argument('[query]', 'Search term to install a server (e.g. filesystem, postgres, github)')
+    .option('-c, --config <path>', 'Custom path to mcp_config.json')
+    .option('-m, --manage', 'Open MCP server management menu directly')
+    .option('-l, --list', 'List installed servers directly')
+    .option('-a, --audit', 'Audit all installed servers for vulnerabilities')
+    .parse(process.argv);
+
+  const options = program.opts();
+  const explicitConfigPath = options.config ? path.resolve(options.config) : null;
+  let initialArgQuery = program.args[0] || '';
+
+  printBanner();
+
+  // If flags provided, run that single command and exit
+  if (options.audit) {
+    await auditAllInstalledServers();
+    return;
+  }
+
+  if (options.manage || options.list) {
+    await manageExistingServers(explicitConfigPath);
+    return;
+  }
+
+  if (initialArgQuery) {
+    await runSearchAndInstallWizard(initialArgQuery, explicitConfigPath);
+    return;
+  }
+
+  // Interactive Main Menu Loop
+  while (true) {
+    const mainActionAns = await promptWithEsc([
+      {
+        type: 'list',
+        name: 'action',
+        message: 'What would you like to do?',
+        choices: [
+          {
+            name: `${pc.bold('🔍 Search & Install')} ${pc.dim('(Discover MCP servers on npm and configure)')}`,
+            value: 'search'
+          },
+          {
+            name: `${pc.bold('📋 Manage Installed Servers')} ${pc.dim('(Inspect, audit vulnerabilities, or remove)')}`,
+            value: 'manage'
+          },
+          {
+            name: `${pc.bold('🛡️  Run Security Audit')} ${pc.dim('(Scan all configured servers for CVEs)')}`,
+            value: 'audit'
+          },
+          new inquirer.Separator(),
+          {
+            name: pc.dim('❌ Exit'),
+            value: 'exit'
+          }
+        ]
+      }
+    ], true);
+
+    if (mainActionAns === BACK_SIGNAL || mainActionAns.action === 'exit' || !mainActionAns.action) {
+      console.log(pc.yellow('Goodbye!\n'));
+      process.exit(0);
+    }
+
+    if (mainActionAns.action === 'search') {
+      await runSearchAndInstallWizard('', explicitConfigPath);
+    } else if (mainActionAns.action === 'manage') {
+      await manageExistingServers(explicitConfigPath);
+    } else if (mainActionAns.action === 'audit') {
+      await auditAllInstalledServers();
     }
   }
 }
