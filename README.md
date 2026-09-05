@@ -1,77 +1,62 @@
-# antigravity-mcp-installer 🚀
+# antigravity-mcp-installer
 
-> CLI interactiva para buscar servidores MCP en el registro de npm y configurarlos automáticamente en **Antigravity CLI** (`~/.gemini/config/mcp_config.json`).
+A lightweight CLI to discover MCP (Model Context Protocol) servers from npm and register them directly into Antigravity CLI's configuration (`~/.gemini/config/mcp_config.json`).
 
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-[![Node.js Version](https://img.shields.io/badge/node-%3E%3D18.0.0-brightgreen.svg)](https://nodejs.org/)
-[![Platform](https://img.shields.io/badge/platform-Linux%20%7C%20macOS%20%7C%20Windows-blue.svg)](https://github.com/hrnntz/antigravity-mcp-installer)
+Provides two terminal commands: `antigravity-mcp-installer` and `agy-mcp`.
 
-Incluye dos comandos listos para usar en tu terminal:
-- **`agy-mcp`** *(alias corto y rápido)*
-- **`antigravity-mcp-installer`** *(nombre completo)*
+## Quick Install
 
----
-
-## ⚡ Instalación en 1 Línea
-
-### En Linux y macOS (Terminal)
-Ejecuta el instalador automático:
+### Linux / macOS
 ```bash
 curl -fsSL https://raw.githubusercontent.com/hrnntz/antigravity-mcp-installer/main/install.sh | bash
 ```
 
-### En Windows (PowerShell)
-Abre PowerShell y ejecuta:
+### Windows (PowerShell)
 ```powershell
 irm https://raw.githubusercontent.com/hrnntz/antigravity-mcp-installer/main/install.ps1 | iex
 ```
 
-### Vía npm (Global)
+### npm (Global)
 ```bash
 npm install -g antigravity-mcp-installer
 ```
 
----
+## Usage
 
-## 🚀 Uso Rápido
-
-### 1. Búsqueda Interactiva
-Abre el explorador interactivo:
+Run interactive search:
 ```bash
 agy-mcp
 ```
-*(o también: `antigravity-mcp-installer`)*
 
-### 2. Buscar directamente un término
+Pass a search term directly:
 ```bash
 agy-mcp sqlite
-agy-mcp filesystem
 agy-mcp postgres
-agy-mcp git
+agy-mcp filesystem
 ```
 
-### 3. Especificar archivo de configuración alternativo
+Specify a custom configuration file:
 ```bash
-agy-mcp brave-search -c /ruta/a/mi_config.json
+agy-mcp git --config ./custom_mcp_config.json
 ```
 
----
+### Options
 
-## ✨ Características
+| Flag | Description | Default |
+|------|-------------|---------|
+| `[query]` | Package keyword to query npm registry | Prompts interactively |
+| `-c, --config <path>` | Path to `mcp_config.json` | `~/.gemini/config/mcp_config.json` |
+| `-V, --version` | Output version | |
+| `-h, --help` | Display help | |
 
-- 🔍 **Búsqueda instantánea**: Consulta servidores MCP directamente en el registro oficial de npm.
-- 🎯 **Selección con teclado**: Explora los resultados con flechas y selecciona con `Enter`.
-- ⚡ **Modo de ejecución flexible**:
-  - `npx -y`: Ejecución liviana bajo demanda (recomendado, sin ensuciar tu sistema).
-  - `npm install -g`: Instalación global permanente.
-- 🛡️ **Edición segura**: Lee, valida y actualiza `mcp_config.json` manejando posibles errores de sintaxis JSON y confirmando si deseas sobrescribir entradas existentes.
-- 🌐 **Multiplataforma**: Funciona idénticamente en Linux, macOS y Windows.
+## How It Works
 
----
+1. Queries the npm registry API (`registry.npmjs.org/-/v1/search`) filtering for MCP packages matching your query.
+2. Lets you pick a server from the interactive terminal list.
+3. Asks whether to run via `npx` (recommended: zero disk footprint, executes on-demand) or install globally via `npm install -g`.
+4. Safely parses and updates `~/.gemini/config/mcp_config.json`, preserving existing entries and verifying JSON integrity.
 
-## 📋 Configuración Generada
-
-La herramienta registra los servidores dentro de `mcpServers` en `~/.gemini/config/mcp_config.json`:
+### Generated Config Example
 
 ```json
 {
@@ -87,8 +72,22 @@ La herramienta registra los servidores dentro de `mcpServers` en `~/.gemini/conf
 }
 ```
 
----
+## Security
 
-## 📄 Licencia
+- **No Shell Injection:** Package installation invokes `child_process.spawn` with argument arrays directly (`shell: false`). No shell concatenation.
+- **Package Name Validation:** All package candidates are validated against the official npm package naming specification.
+- **Prototype Pollution Prevention:** Server identifiers are sanitized and checked against reserved JavaScript properties (`__proto__`, `constructor`, `prototype`).
+- **Atomic Writes:** Configuration writes use temporary files and atomic rename operations to prevent partial file corruption.
+
+## Local Development
+
+```bash
+git clone https://github.com/hrnntz/antigravity-mcp-installer.git
+cd antigravity-mcp-installer
+npm install
+node index.js
+```
+
+## License
 
 MIT © [Hernán Arteaga](https://github.com/hrnntz)

@@ -2,7 +2,7 @@
 
 /**
  * antigravity-mcp-installer
- * CLI interactiva para buscar y registrar servidores MCP en Antigravity CLI.
+ * Interactive CLI to search and register MCP servers in Antigravity CLI.
  */
 
 import { Command } from 'commander';
@@ -12,62 +12,91 @@ import pc from 'picocolors';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
-import { exec } from 'node:child_process';
-import { promisify } from 'node:util';
+import { spawn } from 'node:child_process';
 
-const execAsync = promisify(exec);
-
-// Ruta estándar para Antigravity CLI
 const DEFAULT_CONFIG_PATH = path.join(os.homedir(), '.gemini', 'config', 'mcp_config.json');
 
-/**
- * Imprime el banner visual
- */
+// npm package name standard regex (RFC / npm spec compliance)
+const VALID_NPM_PACKAGE_NAME = /^(@[a-z0-9-~][a-z0-9-._~]*\/)?[a-z0-9-~][a-z0-9-._~]*$/i;
+
+// Protect against Prototype Pollution
+const FORBIDDEN_SERVER_KEYS = new Set(['__proto__', 'constructor', 'prototype']);
+
 function printBanner() {
   console.log();
-  console.log(pc.bold(pc.cyan('╔═════════════════════════════════════════════════════════════╗')));
-  console.log(pc.bold(pc.cyan('║               ANTIGRAVITY MCP INSTALLER                     ║')));
-  console.log(pc.dim('║    Búsqueda y configuración automática de servidores MCP    ║'));
-  console.log(pc.bold(pc.cyan('╚═════════════════════════════════════════════════════════════╝')));
+  console.log(pc.bold(pc.cyan('antigravity-mcp-installer')) + pc.dim(' (agy-mcp)'));
+  console.log(pc.dim('Search & configure MCP servers for Antigravity CLI'));
   console.log();
 }
 
 /**
- * Consulta la API de npm buscando servidores MCP
+ * Safe process execution without shell invocation to prevent command injection
+ */
+function runCommand(command, args = []) {
+  return new Promise((resolve, reject) => {
+    const isWindows = process.platform === 'win32';
+    // On Windows, npm is a cmd script
+    const cmd = isWindows && command === 'npm' ? 'npm.cmd' : command;
+
+    const child = spawn(cmd, args, {
+      stdio: ['ignore', 'pipe', 'pipe'],
+      shell: false
+    });
+
+    let stderr = '';
+    child.stderr.on('data', chunk => {
+      stderr += chunk.toString();
+    });
+
+    child.on('error', err => reject(err));
+    child.on('close', code => {
+      if (code === 0) {
+        resolve();
+      } else {
+        reject(new Error(`Process exited with code ${code}: ${stderr.trim()}`));
+      }
+    });
+  });
+}
+
+/**
+ * Search MCP servers via npm registry API
  */
 async function searchNpmMcpServers(searchTerm) {
+  const sanitizedTerm = searchTerm.trim().replace(/[\r\n\0]/g, '');
+  if (!sanitizedTerm) return [];
+
   const spinner = ora({
-    text: `Consultando el registro de npm para "${searchTerm}"...`,
+    text: `Searching npm registry for "${sanitizedTerm}"...`,
     color: 'cyan'
   }).start();
 
   try {
-    // 1. Intento primario: término + tag mcp-server
-    let query = `${searchTerm.trim()} mcp-server`;
+    let query = `${sanitizedTerm} mcp-server`;
     let url = `https://registry.npmjs.org/-/v1/search?text=${encodeURIComponent(query)}&size=30`;
 
     let response = await fetch(url, {
       headers: {
         'Accept': 'application/json',
-        'User-Agent': 'antigravity-mcp-installer/1.0.0'
+        'User-Agent': 'antigravity-mcp-installer'
       }
     });
 
     if (!response.ok) {
-      throw new Error(`Error en el registro npm: ${response.status} ${response.statusText}`);
+      throw new Error(`npm registry returned HTTP ${response.status}`);
     }
 
     let data = await response.json();
 
-    // 2. Intento de respaldo si no hay resultados: búsqueda más amplia con 'mcp'
+    // Fallback if zero items returned
     if (!data.objects || data.objects.length === 0) {
-      spinner.text = `Ampliando búsqueda en el registro...`;
-      query = `${searchTerm.trim()} mcp`;
+      spinner.text = 'Broadening query...';
+      query = `${sanitizedTerm} mcp`;
       url = `https://registry.npmjs.org/-/v1/search?text=${encodeURIComponent(query)}&size=30`;
       response = await fetch(url, {
         headers: {
           'Accept': 'application/json',
-          'User-Agent': 'antigravity-mcp-installer/1.0.0'
+          'User-Agent': 'antigravity-mcp-installer'
         }
       });
       if (response.ok) {
@@ -75,65 +104,68 @@ async function searchNpmMcpServers(searchTerm) {
       }
     }
 
-    spinner.succeed('Búsqueda completada.');
+    spinner.succeed('Search completed.');
 
-    if (!data.objects || data.objects.length === 0) {
+    if (!Array.isArray(data.objects) || data.objects.length === 0) {
       return [];
     }
 
-    return data.objects.map(item => ({
-      name: item.package.name,
-      version: item.package.version,
-      description: item.package.description || 'Sin descripción disponible',
-      homepage: item.package.links?.npm || ''
-    }));
+    // Filter and sanitize entries
+    return data.objects
+      .filter(item => item?.package?.name && VALID_NPM_PACKAGE_NAME.test(item.package.name))
+      .map(item => ({
+        name: item.package.name,
+        version: item.package.version || '0.0.0',
+        description: item.package.description || 'No description available'
+      }));
   } catch (error) {
-    spinner.fail(pc.red('Fallo al conectar con el registro de npm.'));
+    spinner.fail(pc.red('Failed to reach npm registry.'));
     throw error;
   }
 }
 
 /**
- * Lee o crea el archivo mcp_config.json de forma segura
+ * Safely read or create mcp_config.json
  */
 async function loadOrCreateConfig(configPath) {
-  const dirPath = path.dirname(configPath);
+  const normalizedPath = path.resolve(configPath);
+  const dirPath = path.dirname(normalizedPath);
 
   try {
     await fs.mkdir(dirPath, { recursive: true });
   } catch (err) {
     if (err.code === 'EACCES') {
-      throw new Error(`Permiso denegado al intentar crear el directorio: ${dirPath}`);
+      throw new Error(`Permission denied creating directory: ${dirPath}`);
     }
     throw err;
   }
 
   try {
-    const rawData = await fs.readFile(configPath, 'utf-8');
+    const rawData = await fs.readFile(normalizedPath, 'utf-8');
     const parsed = JSON.parse(rawData);
 
-    if (typeof parsed !== 'object' || parsed === null) {
-      throw new Error('Estructura raíz de JSON no válida (debe ser un objeto).');
+    if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
+      throw new Error('Config file root must be a JSON object.');
     }
 
-    if (!parsed.mcpServers || typeof parsed.mcpServers !== 'object') {
-      parsed.mcpServers = {};
+    if (!parsed.mcpServers || typeof parsed.mcpServers !== 'object' || Array.isArray(parsed.mcpServers)) {
+      parsed.mcpServers = Object.create(null);
     }
 
     return parsed;
   } catch (err) {
     if (err.code === 'ENOENT') {
       const initialConfig = { mcpServers: {} };
-      await fs.writeFile(configPath, JSON.stringify(initialConfig, null, 2) + '\n', 'utf-8');
+      await fs.writeFile(normalizedPath, JSON.stringify(initialConfig, null, 2) + '\n', 'utf-8');
       return initialConfig;
     }
 
     if (err instanceof SyntaxError) {
-      throw new Error(`El archivo de configuración ${configPath} contiene JSON inválido o corrupto.`);
+      throw new Error(`Corrupted JSON in ${normalizedPath}: ${err.message}`);
     }
 
     if (err.code === 'EACCES') {
-      throw new Error(`Permiso denegado para leer el archivo: ${configPath}`);
+      throw new Error(`Permission denied reading ${normalizedPath}`);
     }
 
     throw err;
@@ -141,80 +173,81 @@ async function loadOrCreateConfig(configPath) {
 }
 
 /**
- * Guarda la configuración con indentación y formato limpio
+ * Persist config atomically
  */
 async function saveConfig(configPath, configData) {
+  const normalizedPath = path.resolve(configPath);
+  const tempPath = `${normalizedPath}.${Date.now()}.tmp`;
+
   try {
     const formatted = JSON.stringify(configData, null, 2) + '\n';
-    await fs.writeFile(configPath, formatted, 'utf-8');
+    await fs.writeFile(tempPath, formatted, 'utf-8');
+    await fs.rename(tempPath, normalizedPath);
   } catch (err) {
+    try { await fs.unlink(tempPath); } catch {}
     if (err.code === 'EACCES') {
-      throw new Error(`Permiso denegado para escribir en: ${configPath}`);
+      throw new Error(`Permission denied writing ${normalizedPath}`);
     }
     throw err;
   }
 }
 
 /**
- * Sugerencia de nombre para el identificador en mcpServers
+ * Sanitize package name for default key
  */
 function sanitizeServerKey(pkgName) {
   return pkgName
     .replace(/^@[^/]+\//, '')
     .replace(/^server-/, '')
-    .replace(/-server$/, '');
+    .replace(/-server$/, '')
+    .replace(/[^a-zA-Z0-9_-]/g, '-');
 }
 
-/**
- * Función principal
- */
 async function main() {
   const program = new Command();
 
   program
     .name('antigravity-mcp-installer')
-    .description('Buscador e instalador interactivo de servidores MCP para Antigravity CLI')
+    .alias('agy-mcp')
+    .description('Interactive MCP server installer for Antigravity CLI')
     .version('1.0.0')
-    .argument('[query]', 'Término de búsqueda inicial')
-    .option('-c, --config <path>', 'Ruta personalizada a mcp_config.json', DEFAULT_CONFIG_PATH)
+    .argument('[query]', 'Search term (e.g. filesystem, postgres, sqlite)')
+    .option('-c, --config <path>', 'Custom path to mcp_config.json', DEFAULT_CONFIG_PATH)
     .parse(process.argv);
 
   const options = program.opts();
-  const configPath = path.resolve(options.config);
-  let initialQuery = program.args[0];
+  const configPath = options.config;
+  let query = program.args[0];
 
   printBanner();
 
-  // 1. Solicitar término si no se pasó por argumento
-  if (!initialQuery) {
-    const queryAnswer = await inquirer.prompt([
+  if (!query) {
+    const answer = await inquirer.prompt([
       {
         type: 'input',
         name: 'query',
-        message: '¿Qué servidor MCP deseas buscar? (ej. sqlite, git, filesystem, postgres):',
-        validate: input => input.trim().length > 0 ? true : 'Por favor ingresa al menos una palabra.'
+        message: 'Search MCP servers:',
+        validate: input => input.trim().length > 0 ? true : 'Please enter a search query.'
       }
     ]);
-    initialQuery = queryAnswer.query;
+    query = answer.query;
   }
 
-  // 2. Buscar en el registro
   let packages = [];
   try {
-    packages = await searchNpmMcpServers(initialQuery);
+    packages = await searchNpmMcpServers(query);
   } catch (err) {
-    console.error(pc.red(`\n✖ ${err.message}`));
+    console.error(pc.red(`Error: ${err.message}`));
     process.exit(1);
   }
 
   if (packages.length === 0) {
-    console.log(pc.yellow(`\n⚠ No se encontraron servidores MCP para "${initialQuery}".\n`));
+    console.log(pc.yellow(`No MCP servers found matching "${query}".`));
     process.exit(0);
   }
 
-  // 3. Selección interactiva
   const choices = packages.map(pkg => ({
-    name: `${pc.bold(pc.green(pkg.name))} ${pc.dim(`(v${pkg.version})`)}\n  ${pc.dim(pkg.description)}`,
+    name: `${pc.green(pkg.name)} ${pc.dim(`v${pkg.version}`)} - ${pc.dim(pkg.description)}`,
     value: pkg
   }));
 
@@ -222,27 +255,29 @@ async function main() {
     {
       type: 'list',
       name: 'selectedPkg',
-      message: 'Selecciona el servidor MCP que deseas configurar:',
+      message: 'Select an MCP server to configure:',
       choices,
       pageSize: 10
     }
   ]);
 
-  console.log(pc.cyan(`\nHas seleccionado: ${pc.bold(selectedPkg.name)}`));
+  if (!VALID_NPM_PACKAGE_NAME.test(selectedPkg.name)) {
+    console.error(pc.red('Security violation: Selected package name does not match npm package naming specification.'));
+    process.exit(1);
+  }
 
-  // 4. Modo de ejecución
   const { executionMethod } = await inquirer.prompt([
     {
       type: 'list',
       name: 'executionMethod',
-      message: '¿Cómo deseas ejecutar este servidor MCP?',
+      message: 'Execution method:',
       choices: [
         {
-          name: `${pc.bold('npx')} ${pc.dim('(Recomendado: se ejecuta bajo demanda sin instalación permanente)')}`,
+          name: `${pc.bold('npx')} (Runs on-demand, no local installation footprint)`,
           value: 'npx'
         },
         {
-          name: `${pc.bold('npm install -g')} ${pc.dim('(Instalación global en tu sistema)')}`,
+          name: `${pc.bold('npm install -g')} (Installs permanently on system)`,
           value: 'global'
         }
       ]
@@ -250,58 +285,66 @@ async function main() {
   ]);
 
   if (executionMethod === 'global') {
-    const installSpinner = ora(`Instalando ${selectedPkg.name} globalmente con npm...`).start();
+    const spinner = ora(`Running npm install -g ${selectedPkg.name}...`).start();
     try {
-      await execAsync(`npm install -g ${selectedPkg.name}`);
-      installSpinner.succeed(`Paquete ${pc.bold(selectedPkg.name)} instalado globalmente.`);
+      await runCommand('npm', ['install', '-g', selectedPkg.name]);
+      spinner.succeed(`Package ${pc.bold(selectedPkg.name)} installed globally.`);
     } catch (err) {
-      installSpinner.fail(pc.red('Error al ejecutar npm install -g.'));
-      console.error(pc.dim(err.stderr || err.message));
+      spinner.fail(pc.red('Global installation failed.'));
+      console.error(pc.dim(err.message));
+
       const { continueAnyway } = await inquirer.prompt([
         {
           type: 'confirm',
           name: 'continueAnyway',
-          message: 'La instalación global falló. ¿Deseas continuar configurándolo de todas formas?',
+          message: 'Continue adding server configuration anyway?',
           default: false
         }
       ]);
+
       if (!continueAnyway) {
         process.exit(1);
       }
     }
   }
 
-  // 5. Clave de configuración
   const defaultKey = sanitizeServerKey(selectedPkg.name);
   const { serverKey } = await inquirer.prompt([
     {
       type: 'input',
       name: 'serverKey',
-      message: 'Identificador del servidor en Antigravity:',
+      message: 'Server identifier name:',
       default: defaultKey,
-      validate: input => /^[a-zA-Z0-9_-]+$/.test(input.trim())
-        ? true
-        : 'El identificador solo debe contener letras, números, guiones y guiones bajos.'
+      validate: input => {
+        const trimmed = input.trim();
+        if (!trimmed) return 'Identifier cannot be empty.';
+        if (FORBIDDEN_SERVER_KEYS.has(trimmed.toLowerCase())) {
+          return `"${trimmed}" is a reserved prototype property and cannot be used.`;
+        }
+        if (!/^[a-zA-Z0-9_-]+$/.test(trimmed)) {
+          return 'Only alphanumeric characters, dashes, and underscores are allowed.';
+        }
+        return true;
+      }
     }
   ]);
 
-  // 6. Actualizar mcp_config.json
-  const configSpinner = ora(`Actualizando configuración en ${pc.dim(configPath)}...`).start();
+  const configSpinner = ora(`Updating ${configPath}...`).start();
   try {
     const configData = await loadOrCreateConfig(configPath);
 
-    if (configData.mcpServers[serverKey]) {
+    if (Object.prototype.hasOwnProperty.call(configData.mcpServers, serverKey)) {
       configSpinner.stop();
       const { overwrite } = await inquirer.prompt([
         {
           type: 'confirm',
           name: 'overwrite',
-          message: `El servidor "${serverKey}" ya existe en mcp_config.json. ¿Deseas sobrescribirlo?`,
+          message: `Server "${serverKey}" already exists in config. Overwrite?`,
           default: true
         }
       ]);
       if (!overwrite) {
-        console.log(pc.yellow('\nOperación cancelada.'));
+        console.log(pc.yellow('Operation cancelled.'));
         process.exit(0);
       }
       configSpinner.start();
@@ -320,24 +363,24 @@ async function main() {
     }
 
     await saveConfig(configPath, configData);
-    configSpinner.succeed(pc.green(`Configuración guardada en ${configPath}`));
+    configSpinner.succeed(pc.green(`Saved to ${configPath}`));
 
     console.log();
-    console.log(pc.bold(pc.cyan('🎉 Servidor MCP registrado exitosamente:')));
+    console.log(pc.bold('Server entry configured:'));
     console.log(pc.white(JSON.stringify({ [serverKey]: configData.mcpServers[serverKey] }, null, 2)));
-    console.log(pc.dim('\nAntigravity CLI cargará este servidor en su siguiente sesión.\n'));
+    console.log(pc.dim('\nAntigravity CLI will detect this server on its next run.\n'));
   } catch (err) {
-    configSpinner.fail(pc.red('Fallo al actualizar mcp_config.json.'));
-    console.error(pc.red(`\nDetalle: ${err.message}`));
+    configSpinner.fail(pc.red('Failed to update Antigravity config.'));
+    console.error(pc.red(`\n${err.message}`));
     process.exit(1);
   }
 }
 
 main().catch(err => {
   if (err.name === 'ExitPromptError') {
-    console.log(pc.yellow('\n\nOperación cancelada por el usuario.'));
+    console.log(pc.yellow('\nCancelled.'));
     process.exit(0);
   }
-  console.error(pc.red(`\nError: ${err.message}`));
+  console.error(pc.red(`\nFatal: ${err.message}`));
   process.exit(1);
 });
