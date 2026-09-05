@@ -12,7 +12,10 @@ import path from 'node:path';
 import { BACK_SIGNAL } from './src/constants.js';
 import { printBanner, promptWithEsc, handleExit } from './src/ui/prompts.js';
 import { manageExistingServers, auditAllInstalledServers } from './src/wizards/manage.js';
+import fs from 'node:fs';
 import { runSearchAndInstallWizard } from './src/wizards/install.js';
+
+const pkg = JSON.parse(fs.readFileSync(new URL('./package.json', import.meta.url), 'utf-8'));
 
 process.on('SIGINT', handleExit);
 process.on('SIGTERM', () => process.exit(0));
@@ -24,7 +27,7 @@ async function main() {
     .name('antigravity-mcp-installer')
     .alias('agy-mcp')
     .description('Interactive MCP server installer & manager for Antigravity CLI')
-    .version('1.6.0')
+    .version(pkg.version)
     .argument('[query]', 'Search term to install a server (e.g. filesystem, postgres, github)')
     .option('-c, --config <path>', 'Custom path to mcp_config.json')
     .option('-m, --manage', 'Open MCP server management menu directly')
