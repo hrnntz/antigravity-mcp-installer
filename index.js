@@ -2,7 +2,7 @@
 
 /**
  * antigravity-mcp-installer
- * Interactive CLI to search, explain, audit risk, and register MCP servers in Antigravity CLI.
+ * Interactive CLI to search, explain, audit risk, configure and manage MCP servers for Antigravity CLI.
  */
 
 import { Command } from 'commander';
@@ -38,7 +38,7 @@ process.on('SIGTERM', () => process.exit(0));
 function printBanner() {
   console.log();
   console.log(pc.bold(pc.cyan('antigravity-mcp-installer')) + pc.dim(' (agy-mcp)'));
-  console.log(pc.dim('Search, explain & configure MCP servers for Antigravity CLI'));
+  console.log(pc.dim('Search, audit, configure & manage MCP servers for Antigravity CLI'));
   console.log(pc.dim('Tip: Press [Esc] to go back, or [Ctrl+C] to exit.'));
   console.log();
 }
@@ -111,6 +111,107 @@ async function promptWithEsc(questionOrQuestions, allowEsc = true) {
 }
 
 /**
+ * Safely read or create config file, with auto-recovery for empty or corrupted files
+ */
+async function loadOrCreateConfig(configPath) {
+  const normalizedPath = path.resolve(configPath);
+  const dirPath = path.dirname(normalizedPath);
+
+  try {
+    await fs.mkdir(dirPath, { recursive: true });
+  } catch (err) {
+    if (err.code === 'EACCES') {
+      throw new Error(`Permission denied creating directory: ${dirPath}`);
+    }
+    throw err;
+  }
+
+  try {
+    const rawData = await fs.readFile(normalizedPath, 'utf-8');
+    if (!rawData.trim()) {
+      const initialConfig = { mcpServers: {} };
+      await fs.writeFile(normalizedPath, JSON.stringify(initialConfig, null, 2) + '\n', 'utf-8');
+      return initialConfig;
+    }
+
+    const parsed = JSON.parse(rawData);
+
+    if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
+      throw new Error('Config file root must be a JSON object.');
+    }
+
+    if (!parsed.mcpServers || typeof parsed.mcpServers !== 'object' || Array.isArray(parsed.mcpServers)) {
+      parsed.mcpServers = Object.create(null);
+    }
+
+    return parsed;
+  } catch (err) {
+    if (err.code === 'ENOENT') {
+      const initialConfig = { mcpServers: {} };
+      await fs.writeFile(normalizedPath, JSON.stringify(initialConfig, null, 2) + '\n', 'utf-8');
+      return initialConfig;
+    }
+
+    if (err instanceof SyntaxError) {
+      const backupPath = `${normalizedPath}.corrupted.${Date.now()}.bak`;
+      try { await fs.copyFile(normalizedPath, backupPath); } catch {}
+      console.log(pc.yellow(`\nNotice: Corrupted JSON detected in ${normalizedPath}. Backed up to ${backupPath} and initialized clean config.`));
+      const initialConfig = { mcpServers: {} };
+      await fs.writeFile(normalizedPath, JSON.stringify(initialConfig, null, 2) + '\n', 'utf-8');
+      return initialConfig;
+    }
+
+    if (err.code === 'EACCES') {
+      throw new Error(`Permission denied reading ${normalizedPath}`);
+    }
+
+    throw err;
+  }
+}
+
+/**
+ * Persist config atomically
+ */
+async function saveConfig(configPath, configData) {
+  const normalizedPath = path.resolve(configPath);
+  const tempPath = `${normalizedPath}.${Date.now()}.tmp`;
+
+  try {
+    const formatted = JSON.stringify(configData, null, 2) + '\n';
+    await fs.writeFile(tempPath, formatted, 'utf-8');
+    await fs.rename(tempPath, normalizedPath);
+  } catch (err) {
+    try { await fs.unlink(tempPath); } catch {}
+    if (err.code === 'EACCES') {
+      throw new Error(`Permission denied writing ${normalizedPath}`);
+    }
+    throw err;
+  }
+}
+
+/**
+ * Sanitize package name for default key
+ */
+function sanitizeServerKey(pkgName) {
+  return pkgName
+    .replace(/^@[^/]+\//, '')
+    .replace(/^server-/, '')
+    .replace(/-server$/, '')
+    .replace(/[^a-zA-Z0-9_-]/g, '-');
+}
+
+/**
+ * Extract target npm package name from server configuration
+ */
+function getPackageNameFromConfig(serverConfig) {
+  if (!serverConfig) return '';
+  if (serverConfig.command === 'npx' && Array.isArray(serverConfig.args)) {
+    return serverConfig.args.find(a => !a.startsWith('-')) || '';
+  }
+  return serverConfig.command || '';
+}
+
+/**
  * Quick heuristic risk evaluation for search results listing
  */
 function evaluateQuickRisk(pkg) {
@@ -168,6 +269,62 @@ function extractCapabilities(readmeText) {
 }
 
 /**
+ * Query Google OSV API for vulnerabilities of a package
+ */
+async function queryOsvVulnerabilities(packageName, currentVersion = null) {
+  if (!packageName) return { vulns: [], activeVulns: [] };
+
+  try {
+    const res = await fetch('https://api.osv.dev/v1/query', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'User-Agent': 'antigravity-mcp-installer'
+      },
+      body: JSON.stringify({
+        package: {
+          name: packageName,
+          ecosystem: 'npm'
+        }
+      })
+    });
+
+    if (!res.ok) return { vulns: [], activeVulns: [] };
+
+    const data = await res.json();
+    const vulns = Array.isArray(data.vulns) ? data.vulns : [];
+    const activeVulns = [];
+
+    for (const vuln of vulns) {
+      const vulnId = vuln.aliases?.[0] || vuln.id;
+      const severity = vuln.database_specific?.severity || 'MODERATE';
+      let affected = true;
+
+      if (currentVersion) {
+        for (const aff of vuln.affected || []) {
+          for (const r of aff.ranges || []) {
+            if (r.type === 'SEMVER' && Array.isArray(r.events)) {
+              const fixedEv = r.events.find(e => e.fixed);
+              if (fixedEv && currentVersion >= fixedEv.fixed) {
+                affected = false;
+              }
+            }
+          }
+        }
+      }
+
+      if (affected) {
+        activeVulns.push(`${vulnId} (${severity}) - ${vuln.summary || 'Security advisory'}`);
+      }
+    }
+
+    return { vulns, activeVulns };
+  } catch {
+    return { vulns: [], activeVulns: [] };
+  }
+}
+
+/**
  * Fetch package explanation and audit security in parallel
  */
 async function fetchExplanationAndSecurity(pkg) {
@@ -178,76 +335,28 @@ async function fetchExplanationAndSecurity(pkg) {
 
   const signals = [];
   let score = 0;
-  let activeVulns = [];
   let fullDescription = pkg.description;
   let capabilities = [];
   let docsUrl = pkg.repoUrl || '';
 
-  // Parallel requests: Google OSV Vulnerability DB + npm Registry full metadata
-  const [osvResult, npmResult] = await Promise.allSettled([
-    fetch('https://api.osv.dev/v1/query', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'User-Agent': 'antigravity-mcp-installer'
-      },
-      body: JSON.stringify({
-        package: {
-          name: pkg.name,
-          ecosystem: 'npm'
-        }
-      })
-    }).then(r => r.ok ? r.json() : null),
-
+  const [osvData, npmResult] = await Promise.all([
+    queryOsvVulnerabilities(pkg.name, pkg.version),
     fetch(`https://registry.npmjs.org/${encodeURIComponent(pkg.name)}`, {
-      headers: {
-        'Accept': 'application/json',
-        'User-Agent': 'antigravity-mcp-installer'
-      }
-    }).then(r => r.ok ? r.json() : null)
+      headers: { 'Accept': 'application/json', 'User-Agent': 'antigravity-mcp-installer' }
+    }).then(r => r.ok ? r.json() : null).catch(() => null)
   ]);
 
-  // Process npm package details
-  if (npmResult.status === 'fulfilled' && npmResult.value) {
-    const npmData = npmResult.value;
-    if (npmData.description) {
-      fullDescription = npmData.description;
-    }
-    if (npmData.homepage) {
-      docsUrl = npmData.homepage;
-    }
-    if (npmData.readme) {
-      capabilities = extractCapabilities(npmData.readme);
-    }
+  if (npmResult) {
+    if (npmResult.description) fullDescription = npmResult.description;
+    if (npmResult.homepage) docsUrl = npmResult.homepage;
+    if (npmResult.readme) capabilities = extractCapabilities(npmResult.readme);
   }
 
-  // Process OSV vulnerabilities
-  if (osvResult.status === 'fulfilled' && osvResult.value?.vulns) {
-    const vulns = osvResult.value.vulns;
-    for (const vuln of vulns) {
-      const vulnId = vuln.aliases?.[0] || vuln.id;
-      const severity = vuln.database_specific?.severity || 'MODERATE';
-      
-      let affected = true;
-      for (const aff of vuln.affected || []) {
-        for (const r of aff.ranges || []) {
-          if (r.type === 'SEMVER' && Array.isArray(r.events)) {
-            const fixedEv = r.events.find(e => e.fixed);
-            if (fixedEv && pkg.version && pkg.version >= fixedEv.fixed) {
-              affected = false;
-            }
-          }
-        }
-      }
-
-      if (affected) {
-        activeVulns.push(`${vulnId} (${severity}) - ${vuln.summary || 'Security advisory'}`);
-        score += severity === 'HIGH' || severity === 'CRITICAL' ? 50 : 25;
-      }
-    }
+  const activeVulns = osvData.activeVulns;
+  if (activeVulns.length > 0) {
+    score += 50;
   }
 
-  // Telemetry signals
   const weekly = pkg.downloadsWeekly || 0;
   if (pkg.name.startsWith('@modelcontextprotocol/')) {
     signals.push('Official Model Context Protocol scope package');
@@ -282,7 +391,6 @@ async function fetchExplanationAndSecurity(pkg) {
     badge = pc.bold(pc.yellow('MEDIUM RISK (🟡)'));
   }
 
-  // PRINT MCP EXPLANATION & AUDIT CARD
   console.log();
   console.log(pc.bold(pc.cyan('═'.repeat(68))));
   console.log(` 📦 ${pc.bold(pkg.name)} ${pc.dim(`(v${pkg.version})`)}`);
@@ -439,104 +547,242 @@ async function searchNpmMcpServers(searchTerm) {
 }
 
 /**
- * Safely read or create config file
+ * Manage existing MCP servers module
  */
-async function loadOrCreateConfig(configPath) {
-  const normalizedPath = path.resolve(configPath);
-  const dirPath = path.dirname(normalizedPath);
+async function manageExistingServers(explicitPath = null) {
+  let scopePath = explicitPath;
 
-  try {
-    await fs.mkdir(dirPath, { recursive: true });
-  } catch (err) {
-    if (err.code === 'EACCES') {
-      throw new Error(`Permission denied creating directory: ${dirPath}`);
+  if (!scopePath) {
+    const scopeAns = await promptWithEsc([
+      {
+        type: 'list',
+        name: 'scope',
+        message: 'Select configuration scope to manage:',
+        choices: [
+          {
+            name: `${pc.bold('Global')} ${pc.dim(`(${GLOBAL_CONFIG_PATH})`)}`,
+            value: GLOBAL_CONFIG_PATH
+          },
+          {
+            name: `${pc.bold('Local / Project')} ${pc.dim(`(${LOCAL_CONFIG_PATH})`)}`,
+            value: LOCAL_CONFIG_PATH
+          },
+          new inquirer.Separator(),
+          {
+            name: pc.dim('← [Esc] Back to main menu'),
+            value: BACK_SIGNAL
+          }
+        ]
+      }
+    ]);
+
+    if (scopeAns === BACK_SIGNAL || scopeAns.scope === BACK_SIGNAL) {
+      return;
     }
-    throw err;
+    scopePath = scopeAns.scope;
   }
 
-  try {
-    const rawData = await fs.readFile(normalizedPath, 'utf-8');
-    if (!rawData.trim()) {
-      const initialConfig = { mcpServers: {} };
-      await fs.writeFile(normalizedPath, JSON.stringify(initialConfig, null, 2) + '\n', 'utf-8');
-      return initialConfig;
-    }
-    const parsed = JSON.parse(rawData);
+  while (true) {
+    const configData = await loadOrCreateConfig(scopePath);
+    const serverKeys = Object.keys(configData.mcpServers || {});
 
-    if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
-      throw new Error('Config file root must be a JSON object.');
+    if (serverKeys.length === 0) {
+      console.log(pc.yellow(`\nNo MCP servers configured in ${scopePath}.\n`));
+      return;
     }
 
-    if (!parsed.mcpServers || typeof parsed.mcpServers !== 'object' || Array.isArray(parsed.mcpServers)) {
-      parsed.mcpServers = Object.create(null);
+    // Run quick vulnerability check on configured servers
+    const spinner = ora({
+      text: `Auditing vulnerabilities for ${serverKeys.length} server(s) in ${path.basename(scopePath)}...`,
+      color: 'cyan'
+    }).start();
+
+    const auditResults = {};
+    await Promise.all(
+      serverKeys.map(async key => {
+        const server = configData.mcpServers[key];
+        const pkgName = getPackageNameFromConfig(server);
+        const osv = await queryOsvVulnerabilities(pkgName);
+        auditResults[key] = { pkgName, vulns: osv.vulns, activeVulns: osv.activeVulns };
+      })
+    );
+    spinner.stop();
+
+    const choices = serverKeys.map(key => {
+      const s = configData.mcpServers[key];
+      const audit = auditResults[key];
+      const cmdPreview = `${s.command || ''} ${(s.args || []).join(' ')}`.trim();
+      
+      let badge = pc.green('[🟢 Safe]');
+      if (audit.activeVulns.length > 0) {
+        badge = pc.bold(pc.red(`[🔴 ${audit.activeVulns.length} CVEs!]`));
+      }
+
+      return {
+        name: `${pc.bold(key)} ${badge} ${pc.dim(`(${cmdPreview})`)}`,
+        value: key
+      };
+    });
+
+    choices.push(new inquirer.Separator());
+    choices.push({
+      name: pc.dim('← [Esc] Back'),
+      value: BACK_SIGNAL
+    });
+
+    const selectAns = await promptWithEsc([
+      {
+        type: 'list',
+        name: 'serverKey',
+        message: `Configured MCP servers in ${pc.cyan(scopePath)} (${serverKeys.length}):`,
+        choices,
+        pageSize: 12
+      }
+    ]);
+
+    if (selectAns === BACK_SIGNAL || selectAns.serverKey === BACK_SIGNAL) {
+      return;
     }
 
-    return parsed;
-  } catch (err) {
-    if (err.code === 'ENOENT') {
-      const initialConfig = { mcpServers: {} };
-      await fs.writeFile(normalizedPath, JSON.stringify(initialConfig, null, 2) + '\n', 'utf-8');
-      return initialConfig;
+    const key = selectAns.serverKey;
+    const serverConfig = configData.mcpServers[key];
+    const audit = auditResults[key];
+
+    // Server details inspection card
+    console.log();
+    console.log(pc.bold(pc.cyan('═'.repeat(68))));
+    console.log(` ⚙️  MCP Server: ${pc.bold(pc.green(key))}`);
+    console.log(pc.bold(pc.cyan('─'.repeat(68))));
+    console.log(`  • Config File : ${pc.white(scopePath)}`);
+    console.log(`  • Command     : ${pc.white(serverConfig.command || 'none')}`);
+    console.log(`  • Arguments   : ${pc.white(JSON.stringify(serverConfig.args || []))}`);
+    if (serverConfig.env) {
+      console.log(`  • Environment : ${pc.white(JSON.stringify(serverConfig.env))}`);
+    }
+    console.log(`  • Package     : ${pc.cyan(audit.pkgName || 'custom')}`);
+    console.log(pc.bold(pc.cyan('─'.repeat(68))));
+
+    if (audit.activeVulns.length > 0) {
+      console.log(pc.red(` ⚠ Security Vulnerabilities (${audit.activeVulns.length}):`));
+      audit.activeVulns.forEach(v => console.log(pc.red(`    • ${v}`)));
+    } else {
+      console.log(pc.green(` ✔ Security Status: No active CVEs reported in Google OSV database.`));
+    }
+    console.log(pc.bold(pc.cyan('═'.repeat(68))));
+    console.log();
+
+    const actionAns = await promptWithEsc([
+      {
+        type: 'list',
+        name: 'action',
+        message: `Manage "${key}":`,
+        choices: [
+          {
+            name: `${pc.bold(pc.red('🗑️  Remove server'))} ${pc.dim('(Delete from configuration)')}`,
+            value: 'remove'
+          },
+          {
+            name: pc.dim('← [Esc] Back to servers list'),
+            value: BACK_SIGNAL
+          }
+        ]
+      }
+    ]);
+
+    if (actionAns === BACK_SIGNAL || actionAns.action === BACK_SIGNAL) {
+      continue;
     }
 
-    if (err instanceof SyntaxError) {
-      const backupPath = `${normalizedPath}.corrupted.${Date.now()}.bak`;
-      try { await fs.copyFile(normalizedPath, backupPath); } catch {}
-      console.log(pc.yellow(`\nNotice: Corrupted JSON detected in ${normalizedPath}. Backed up to ${backupPath} and initialized clean config.`));
-      const initialConfig = { mcpServers: {} };
-      await fs.writeFile(normalizedPath, JSON.stringify(initialConfig, null, 2) + '\n', 'utf-8');
-      return initialConfig;
-    }
+    if (actionAns.action === 'remove') {
+      const confirmAns = await promptWithEsc([
+        {
+          type: 'confirm',
+          name: 'confirmRemove',
+          message: `Are you sure you want to delete "${key}" from ${scopePath}?`,
+          default: false
+        }
+      ]);
 
-    if (err.code === 'EACCES') {
-      throw new Error(`Permission denied reading ${normalizedPath}`);
+      if (confirmAns !== BACK_SIGNAL && confirmAns.confirmRemove) {
+        delete configData.mcpServers[key];
+        await saveConfig(scopePath, configData);
+        console.log(pc.green(`\n✔ Server "${key}" was successfully removed from ${scopePath}.\n`));
+      } else {
+        console.log(pc.yellow('\nRemoval cancelled.\n'));
+      }
     }
-
-    throw err;
   }
 }
 
 /**
- * Persist config atomically
+ * Scan all installed servers across Global and Local configs
  */
-async function saveConfig(configPath, configData) {
-  const normalizedPath = path.resolve(configPath);
-  const tempPath = `${normalizedPath}.${Date.now()}.tmp`;
+async function auditAllInstalledServers() {
+  console.log(pc.bold('\nAuditing all configured MCP servers against Google OSV database...\n'));
 
-  try {
-    const formatted = JSON.stringify(configData, null, 2) + '\n';
-    await fs.writeFile(tempPath, formatted, 'utf-8');
-    await fs.rename(tempPath, normalizedPath);
-  } catch (err) {
-    try { await fs.unlink(tempPath); } catch {}
-    if (err.code === 'EACCES') {
-      throw new Error(`Permission denied writing ${normalizedPath}`);
+  const paths = [
+    { label: 'Global', path: GLOBAL_CONFIG_PATH },
+    { label: 'Local', path: LOCAL_CONFIG_PATH }
+  ];
+
+  let totalScanned = 0;
+  let totalIssues = 0;
+
+  for (const item of paths) {
+    try {
+      const data = await loadOrCreateConfig(item.path);
+      const keys = Object.keys(data.mcpServers || {});
+
+      if (keys.length === 0) continue;
+
+      console.log(pc.bold(pc.cyan(`── ${item.label} Configuration (${item.path}) ──`)));
+
+      for (const key of keys) {
+        totalScanned++;
+        const s = data.mcpServers[key];
+        const pkgName = getPackageNameFromConfig(s);
+        const { activeVulns } = await queryOsvVulnerabilities(pkgName);
+
+        if (activeVulns.length > 0) {
+          totalIssues += activeVulns.length;
+          console.log(` ${pc.bold(pc.red('✖'))} ${pc.bold(key)} (${pkgName}): ${pc.red(`${activeVulns.length} vulnerabilities detected!`)}`);
+          activeVulns.forEach(v => console.log(pc.red(`     • ${v}`)));
+        } else {
+          console.log(` ${pc.bold(pc.green('✔'))} ${pc.bold(key)} (${pkgName || s.command}): ${pc.green('No active CVEs')}`);
+        }
+      }
+      console.log();
+    } catch {}
+  }
+
+  if (totalScanned === 0) {
+    console.log(pc.yellow('No MCP servers currently installed in Global or Local configs.\n'));
+  } else {
+    console.log(pc.bold('─'.repeat(50)));
+    if (totalIssues === 0) {
+      console.log(pc.bold(pc.green(`All ${totalScanned} installed MCP servers are safe and clear of known CVEs! 🎉\n`)));
+    } else {
+      console.log(pc.bold(pc.red(`Audit complete: Found ${totalIssues} active vulnerability notices across ${totalScanned} servers.\n`)));
     }
-    throw err;
   }
 }
 
 /**
- * Sanitize package name for default key
+ * Main flow
  */
-function sanitizeServerKey(pkgName) {
-  return pkgName
-    .replace(/^@[^/]+\//, '')
-    .replace(/^server-/, '')
-    .replace(/-server$/, '')
-    .replace(/[^a-zA-Z0-9_-]/g, '-');
-}
-
 async function main() {
   const program = new Command();
 
   program
     .name('antigravity-mcp-installer')
     .alias('agy-mcp')
-    .description('Interactive MCP server installer for Antigravity CLI')
-    .version('1.4.1')
-    .argument('[query]', 'Search term (e.g. filesystem, postgres, github, sqlite)')
+    .description('Interactive MCP server installer & manager for Antigravity CLI')
+    .version('1.5.0')
+    .argument('[query]', 'Search term to install a server (e.g. filesystem, postgres, github)')
     .option('-c, --config <path>', 'Custom path to mcp_config.json')
+    .option('-m, --manage', 'Open MCP server management menu directly')
+    .option('-l, --list', 'List installed servers directly')
+    .option('-a, --audit', 'Audit all installed servers for vulnerabilities')
     .parse(process.argv);
 
   const options = program.opts();
@@ -545,6 +791,61 @@ async function main() {
 
   printBanner();
 
+  if (options.audit) {
+    await auditAllInstalledServers();
+    return;
+  }
+
+  if (options.manage || options.list) {
+    await manageExistingServers(explicitConfigPath);
+    return;
+  }
+
+  // If no query passed, show main action menu
+  if (!initialArgQuery) {
+    const mainActionAns = await promptWithEsc([
+      {
+        type: 'list',
+        name: 'action',
+        message: 'What would you like to do?',
+        choices: [
+          {
+            name: `${pc.bold('🔍 Search & Install')} ${pc.dim('(Discover MCP servers on npm and configure)')}`,
+            value: 'search'
+          },
+          {
+            name: `${pc.bold('📋 Manage Installed Servers')} ${pc.dim('(Inspect, audit vulnerabilities, or remove)')}`,
+            value: 'manage'
+          },
+          {
+            name: `${pc.bold('🛡️  Run Security Audit')} ${pc.dim('(Scan all configured servers for CVEs)')}`,
+            value: 'audit'
+          },
+          new inquirer.Separator(),
+          {
+            name: pc.dim('❌ Exit'),
+            value: 'exit'
+          }
+        ]
+      }
+    ], false);
+
+    if (mainActionAns.action === 'manage') {
+      await manageExistingServers(explicitConfigPath);
+      return;
+    }
+
+    if (mainActionAns.action === 'audit') {
+      await auditAllInstalledServers();
+      return;
+    }
+
+    if (mainActionAns.action === 'exit' || !mainActionAns.action) {
+      process.exit(0);
+    }
+  }
+
+  // Search and Install Wizard
   let state = 'SEARCH';
   let query = initialArgQuery;
   let packages = [];

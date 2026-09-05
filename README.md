@@ -2,7 +2,7 @@
 
 [![npm version](https://img.shields.io/npm/v/antigravity-mcp-installer.svg)](https://www.npmjs.com/package/antigravity-mcp-installer) [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
-A fast, interactive CLI to discover, security-audit, and install MCP (Model Context Protocol) servers into Antigravity CLI.
+A fast, interactive CLI to discover, security-audit, configure, and manage MCP (Model Context Protocol) servers for Antigravity CLI.
 
 Provides two terminal commands: `antigravity-mcp-installer` and `agy-mcp`.
 
@@ -30,55 +30,66 @@ npx antigravity-mcp-installer
 
 ## Usage
 
-Run interactive search:
+### 1. Interactive Main Menu
+Launch without arguments to access the interactive menu (search, manage, audit):
 ```bash
 agy-mcp
 ```
 
-Pass a search term directly:
+### 2. Quick Search & Install
+Directly query an MCP server keyword:
 ```bash
-agy-mcp sqlite
+agy-mcp github
 agy-mcp postgres
+agy-mcp sqlite
 agy-mcp filesystem
 ```
 
-Specify an explicit config file:
+### 3. Manage Installed Servers (List / Inspect / Remove)
+Inspect installed servers and delete them with confirmation:
 ```bash
-agy-mcp git --config ./custom_mcp_config.json
+agy-mcp --manage
+# or
+agy-mcp --list
 ```
 
-## Key Capabilities
-
-### 1. Ranked by Download Popularity
-Search results are automatically sorted from most downloaded to least downloaded, with visual weekly download counters (`🔥 1,366 dl/wk`) so you immediately spot the most battle-tested community implementations.
-
-### 2. Full Keyboard Navigation (`[Esc]` to Go Back)
-Made a mistake or want to choose another server? Press `[Esc]` (or select the `← Volver` option) at any step of the wizard to step backward without exiting the CLI.
-
-### 3. Automated Security Risk Audit
-Every package is evaluated and cross-referenced in real-time against Google's **OSV (Open Source Vulnerabilities)** database (`api.osv.dev`) and npm registry telemetry:
-
-- **LOW RISK (🟢):** No active CVEs, verified source repository, high download volume, or official `@modelcontextprotocol` package.
-- **MEDIUM RISK (🟡):** Low download volume (<100/week) or missing source repository metadata.
-- **HIGH RISK (🔴):** Active unpatched CVEs found in vulnerability databases, or unvetted/suspicious packages. Requires explicit user confirmation to proceed.
-
-### 4. Global vs Private (Local) Configuration Scope
-Choose where the server is registered:
-- **Global:** Installed into `~/.gemini/config/mcp_config.json` (available across all your projects).
-- **Privado / Local:** Installed into `./.gemini/mcp_config.json` (scoped exclusively to your current project/repository).
-
-### 5. Flexible Execution
-- **`npx` (Recommended):** Zero local footprint, runs on-demand with `-y`.
-- **`npm install -g`:** Installs permanently on your system.
+### 4. Live Vulnerability Audit of Installed Servers
+Scan all configured MCP servers across Global and Local configs against Google's OSV database:
+```bash
+agy-mcp --audit
+```
 
 ## Options
 
 | Flag | Description | Default |
 |------|-------------|---------|
-| `[query]` | Package keyword to query npm registry | Prompts interactively |
-| `-c, --config <path>` | Explicit path to `mcp_config.json` | Prompts for Global vs Local |
+| `[query]` | Search keyword to install an MCP server | Prompts main menu |
+| `-m, --manage` | Open management menu for configured servers | |
+| `-l, --list` | List installed servers directly | |
+| `-a, --audit` | Scan all installed servers for CVE vulnerabilities | |
+| `-c, --config <path>` | Explicit path to `mcp_config.json` | Prompts Global vs Local |
 | `-V, --version` | Output version | |
 | `-h, --help` | Display help | |
+
+## Key Capabilities
+
+### 1. Installed Server Management & Removal
+Easily inspect any existing MCP server in your `mcp_config.json` (view exact commands, arguments, environment variables) and remove servers cleanly with a single click and confirmation.
+
+### 2. Real-Time CVE & Vulnerability Auditing
+Integrated directly with **Google OSV (Open Source Vulnerabilities)** database (`api.osv.dev`):
+- Audits packages before installing them.
+- Audits your **already installed** MCP servers to notify you if any installed tool has discovered security advisories.
+
+### 3. Ranked by Download Popularity
+Search results are sorted by relevance to your keyword and ranked by weekly download count (`🔥 1,366 dl/wk`), filtering out generic libraries.
+
+### 4. Full Keyboard Navigation (`[Esc]` to Go Back)
+Press `[Esc]` (or choose `← Back`) at any step to return to the previous screen without exiting the CLI. Press `[Ctrl+C]` to exit immediately.
+
+### 5. Global vs Local Configuration Scope
+- **Global:** Configured in `~/.gemini/config/mcp_config.json` (available across all projects).
+- **Local:** Configured in `./.gemini/mcp_config.json` (scoped exclusively to the current workspace).
 
 ## Generated Config Example
 
