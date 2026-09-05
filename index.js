@@ -534,7 +534,7 @@ async function main() {
     .name('antigravity-mcp-installer')
     .alias('agy-mcp')
     .description('Interactive MCP server installer for Antigravity CLI')
-    .version('1.4.0')
+    .version('1.4.1')
     .argument('[query]', 'Search term (e.g. filesystem, postgres, github, sqlite)')
     .option('-c, --config <path>', 'Custom path to mcp_config.json')
     .parse(process.argv);
