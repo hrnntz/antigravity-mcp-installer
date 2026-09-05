@@ -1,6 +1,6 @@
 # antigravity-mcp-installer
 
-[![npm version](https://img.shields.io/npm/v/antigravity-mcp-installer.svg)](https://www.npmjs.com/package/antigravity-mcp-installer) [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![CI](https://github.com/hrnntz/antigravity-mcp-installer/actions/workflows/ci.yml/badge.svg) [![npm version](https://img.shields.io/npm/v/antigravity-mcp-installer.svg)](https://www.npmjs.com/package/antigravity-mcp-installer) [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
 A fast, interactive CLI to discover, security-audit, configure, and manage MCP (Model Context Protocol) servers for Antigravity CLI.
 
