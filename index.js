@@ -212,6 +212,37 @@ function getPackageNameFromConfig(serverConfig) {
 }
 
 /**
+ * Automatically detect required environment variables or API keys from README
+ */
+function detectRequiredEnvVars(readmeText) {
+  if (!readmeText) return [];
+  const found = new Set();
+
+  // Match typical uppercase env var patterns (e.g. BRAVE_API_KEY, GITHUB_TOKEN, POSTGRES_URL)
+  const matches = readmeText.match(/\b([A-Z0-9_]{2,}_(?:KEY|TOKEN|SECRET|URL|API|PASSWORD|PAT|ID|AUTH))\b/g);
+  if (matches) {
+    const ignored = new Set(['API_KEY', 'SECRET_KEY', 'YOUR_API_KEY', 'YOUR_TOKEN', 'ACCESS_TOKEN', 'BEARER_TOKEN']);
+    matches.forEach(m => {
+      if (!ignored.has(m) && m.length < 40) {
+        found.add(m);
+      }
+    });
+  }
+
+  // Match JSON env block in README (e.g. "env": { "FOO": ... })
+  const envBlockRegex = /"env"\s*:\s*\{([^}]+)\}/gi;
+  let match;
+  while ((match = envBlockRegex.exec(readmeText)) !== null) {
+    const keys = match[1].match(/"([A-Z0-9_]+)"\s*:/g);
+    if (keys) {
+      keys.forEach(k => found.add(k.replace(/[" :]/g, '')));
+    }
+  }
+
+  return Array.from(found).slice(0, 8);
+}
+
+/**
  * Quick heuristic risk evaluation for search results listing
  */
 function evaluateQuickRisk(pkg) {
@@ -325,7 +356,7 @@ async function queryOsvVulnerabilities(packageName, currentVersion = null) {
 }
 
 /**
- * Fetch package explanation and audit security in parallel
+ * Fetch package explanation, audit security, and detect required environment variables in parallel
  */
 async function fetchExplanationAndSecurity(pkg) {
   const spinner = ora({
@@ -337,6 +368,7 @@ async function fetchExplanationAndSecurity(pkg) {
   let score = 0;
   let fullDescription = pkg.description;
   let capabilities = [];
+  let detectedEnvVars = [];
   let docsUrl = pkg.repoUrl || '';
 
   const [osvData, npmResult] = await Promise.all([
@@ -349,7 +381,10 @@ async function fetchExplanationAndSecurity(pkg) {
   if (npmResult) {
     if (npmResult.description) fullDescription = npmResult.description;
     if (npmResult.homepage) docsUrl = npmResult.homepage;
-    if (npmResult.readme) capabilities = extractCapabilities(npmResult.readme);
+    if (npmResult.readme) {
+      capabilities = extractCapabilities(npmResult.readme);
+      detectedEnvVars = detectRequiredEnvVars(npmResult.readme);
+    }
   }
 
   const activeVulns = osvData.activeVulns;
@@ -405,6 +440,12 @@ async function fetchExplanationAndSecurity(pkg) {
     capabilities.forEach(cap => console.log(`   • ${pc.cyan(cap)}`));
   }
 
+  if (detectedEnvVars.length > 0) {
+    console.log();
+    console.log(pc.bold(' 🔑 Detected Environment Variable / API Key requirements:'));
+    detectedEnvVars.forEach(env => console.log(`   • ${pc.yellow(env)}`));
+  }
+
   if (docsUrl) {
     console.log();
     console.log(pc.dim(` 🌐 Documentation / Repo: ${docsUrl}`));
@@ -425,7 +466,7 @@ async function fetchExplanationAndSecurity(pkg) {
   console.log(pc.bold(pc.cyan('═'.repeat(68))));
   console.log();
 
-  return { level, activeVulns, fullDescription, capabilities };
+  return { level, activeVulns, fullDescription, capabilities, detectedEnvVars };
 }
 
 /**
@@ -553,7 +594,6 @@ async function manageExistingServers(explicitPath = null) {
   let manageScope = explicitPath;
 
   while (true) {
-    // 1. If scope not explicitly provided via CLI flag, ask for scope
     if (!explicitPath) {
       const scopeAns = await promptWithEsc([
         {
@@ -579,12 +619,11 @@ async function manageExistingServers(explicitPath = null) {
       ]);
 
       if (scopeAns === BACK_SIGNAL || scopeAns.scope === BACK_SIGNAL) {
-        return; // Returns to main menu loop
+        return;
       }
       manageScope = scopeAns.scope;
     }
 
-    // 2. Loop through servers in the selected scope
     let inScopeLoop = true;
     while (inScopeLoop) {
       const configData = await loadOrCreateConfig(manageScope);
@@ -594,7 +633,7 @@ async function manageExistingServers(explicitPath = null) {
         console.log(pc.yellow(`\nNo MCP servers configured in ${manageScope}.\n`));
         if (explicitPath) return;
         inScopeLoop = false;
-        break; // Return to scope selection
+        break;
       }
 
       const spinner = ora({
@@ -623,8 +662,11 @@ async function manageExistingServers(explicitPath = null) {
           badge = pc.bold(pc.red(`[🔴 ${audit.activeVulns.length} CVEs!]`));
         }
 
+        const envCount = s.env ? Object.keys(s.env).length : 0;
+        const envBadge = envCount > 0 ? pc.yellow(` [🔑 ${envCount} env]`) : '';
+
         return {
-          name: `${pc.bold(key)} ${badge} ${pc.dim(`(${cmdPreview})`)}`,
+          name: `${pc.bold(key)} ${badge}${envBadge} ${pc.dim(`(${cmdPreview})`)}`,
           value: key
         };
       });
@@ -648,14 +690,13 @@ async function manageExistingServers(explicitPath = null) {
       if (selectAns === BACK_SIGNAL || selectAns.serverKey === BACK_SIGNAL) {
         if (explicitPath) return;
         inScopeLoop = false;
-        break; // Return to scope selection
+        break;
       }
 
       const key = selectAns.serverKey;
       const serverConfig = configData.mcpServers[key];
       const audit = auditResults[key];
 
-      // Inspection card
       console.log();
       console.log(pc.bold(pc.cyan('═'.repeat(68))));
       console.log(` ⚙️  MCP Server: ${pc.bold(pc.green(key))}`);
@@ -663,9 +704,17 @@ async function manageExistingServers(explicitPath = null) {
       console.log(`  • Config File : ${pc.white(manageScope)}`);
       console.log(`  • Command     : ${pc.white(serverConfig.command || 'none')}`);
       console.log(`  • Arguments   : ${pc.white(JSON.stringify(serverConfig.args || []))}`);
-      if (serverConfig.env) {
-        console.log(`  • Environment : ${pc.white(JSON.stringify(serverConfig.env))}`);
+      
+      if (serverConfig.env && Object.keys(serverConfig.env).length > 0) {
+        console.log(`  • Environment Variables / API Keys:`);
+        for (const [envK, envV] of Object.entries(serverConfig.env)) {
+          const masked = String(envV).length > 6 ? String(envV).slice(0, 3) + '••••••••' + String(envV).slice(-3) : '••••••••';
+          console.log(`      ${pc.yellow(envK)} = ${pc.dim(masked)}`);
+        }
+      } else {
+        console.log(`  • Environment : ${pc.dim('None configured')}`);
       }
+
       console.log(`  • Package     : ${pc.cyan(audit.pkgName || 'custom')}`);
       console.log(pc.bold(pc.cyan('─'.repeat(68))));
 
@@ -685,6 +734,10 @@ async function manageExistingServers(explicitPath = null) {
           message: `Manage "${key}":`,
           choices: [
             {
+              name: `${pc.bold('🔑 Add / Edit Environment Variables (API Keys)')}`,
+              value: 'edit_env'
+            },
+            {
               name: `${pc.bold(pc.red('🗑️  Remove server'))} ${pc.dim('(Delete from configuration)')}`,
               value: 'remove'
             },
@@ -697,7 +750,37 @@ async function manageExistingServers(explicitPath = null) {
       ]);
 
       if (actionAns === BACK_SIGNAL || actionAns.action === BACK_SIGNAL) {
-        continue; // Stays in server list loop
+        continue;
+      }
+
+      if (actionAns.action === 'edit_env') {
+        serverConfig.env = serverConfig.env || {};
+        const varNameAns = await promptWithEsc([
+          {
+            type: 'input',
+            name: 'varName',
+            message: 'Environment Variable name (e.g. BRAVE_API_KEY, GITHUB_TOKEN):',
+            validate: input => /^[A-Z0-9_]+$/i.test(input.trim()) ? true : 'Use alphanumeric characters and underscores.'
+          }
+        ]);
+
+        if (varNameAns !== BACK_SIGNAL && varNameAns.varName) {
+          const varName = varNameAns.varName.trim().toUpperCase();
+          const varValAns = await promptWithEsc([
+            {
+              type: 'input',
+              name: 'varVal',
+              message: `Enter value for ${pc.yellow(varName)}:`,
+              default: serverConfig.env[varName] || ''
+            }
+          ]);
+
+          if (varValAns !== BACK_SIGNAL) {
+            serverConfig.env[varName] = varValAns.varVal.trim();
+            await saveConfig(manageScope, configData);
+            console.log(pc.green(`\n✔ Saved ${varName} to "${key}" environment configuration.\n`));
+          }
+        }
       }
 
       if (actionAns.action === 'remove') {
@@ -776,7 +859,6 @@ async function auditAllInstalledServers() {
     }
   }
 
-  // Allow user to return to menu cleanly
   await promptWithEsc([
     {
       type: 'list',
@@ -799,6 +881,7 @@ async function runSearchAndInstallWizard(initialQuery = '', explicitConfigPath =
   let targetConfigPath = explicitConfigPath;
   let executionMethod = 'npx';
   let serverKey = '';
+  let serverEnv = {};
 
   while (state !== 'DONE') {
     switch (state) {
@@ -814,7 +897,7 @@ async function runSearchAndInstallWizard(initialQuery = '', explicitConfigPath =
           ], true);
 
           if (ans === BACK_SIGNAL) {
-            return; // Returns to main menu
+            return;
           }
 
           query = ans.query;
@@ -1030,6 +1113,121 @@ async function runSearchAndInstallWizard(initialQuery = '', explicitConfigPath =
         }
 
         serverKey = ans.serverKey;
+        state = 'CONFIGURE_ENV';
+        break;
+      }
+
+      case 'CONFIGURE_ENV': {
+        serverEnv = {};
+        const detected = security?.detectedEnvVars || [];
+
+        let promptEnv = false;
+        if (detected.length > 0) {
+          console.log();
+          console.log(pc.yellow(`💡 This MCP server recommends the following API keys / environment variables:`));
+          detected.forEach(v => console.log(pc.yellow(`   • ${v}`)));
+          console.log();
+
+          const envConfirmAns = await promptWithEsc([
+            {
+              type: 'confirm',
+              name: 'configureNow',
+              message: 'Do you want to provide values for API keys / environment variables now?',
+              default: true
+            }
+          ]);
+
+          if (envConfirmAns === BACK_SIGNAL) {
+            state = 'SET_KEY';
+            break;
+          }
+          promptEnv = envConfirmAns.configureNow;
+        } else {
+          const envOptionalAns = await promptWithEsc([
+            {
+              type: 'confirm',
+              name: 'needsEnv',
+              message: 'Does this MCP server require any API keys or environment variables?',
+              default: false
+            }
+          ]);
+
+          if (envOptionalAns === BACK_SIGNAL) {
+            state = 'SET_KEY';
+            break;
+          }
+          promptEnv = envOptionalAns.needsEnv;
+        }
+
+        if (promptEnv) {
+          // Fill detected variables first
+          for (const envName of detected) {
+            const valAns = await promptWithEsc([
+              {
+                type: 'input',
+                name: 'val',
+                message: `Enter value for ${pc.cyan(envName)} (leave blank to skip):`
+              }
+            ]);
+
+            if (valAns === BACK_SIGNAL) {
+              state = 'SET_KEY';
+              break;
+            }
+            if (valAns.val && valAns.val.trim()) {
+              serverEnv[envName] = valAns.val.trim();
+            }
+          }
+
+          // Custom extra variables
+          let addingCustom = true;
+          while (addingCustom) {
+            const addMoreAns = await promptWithEsc([
+              {
+                type: 'confirm',
+                name: 'addAnother',
+                message: 'Add an additional custom environment variable / API key?',
+                default: false
+              }
+            ]);
+
+            if (addMoreAns === BACK_SIGNAL || !addMoreAns.addAnother) {
+              addingCustom = false;
+              break;
+            }
+
+            const customNameAns = await promptWithEsc([
+              {
+                type: 'input',
+                name: 'name',
+                message: 'Variable name (e.g. OPENAI_API_KEY, DATABASE_URL):',
+                validate: input => /^[A-Z0-9_]+$/i.test(input.trim()) ? true : 'Use alphanumeric characters and underscores.'
+              }
+            ]);
+
+            if (customNameAns === BACK_SIGNAL || !customNameAns.name) {
+              break;
+            }
+
+            const cName = customNameAns.name.trim().toUpperCase();
+            const customValAns = await promptWithEsc([
+              {
+                type: 'input',
+                name: 'val',
+                message: `Enter value for ${pc.cyan(cName)}:`
+              }
+            ]);
+
+            if (customValAns === BACK_SIGNAL) {
+              break;
+            }
+
+            if (customValAns.val && customValAns.val.trim()) {
+              serverEnv[cName] = customValAns.val.trim();
+            }
+          }
+        }
+
         state = 'SAVE';
         break;
       }
@@ -1058,17 +1256,16 @@ async function runSearchAndInstallWizard(initialQuery = '', explicitConfigPath =
             configSpinner.start();
           }
 
-          if (executionMethod === 'npx') {
-            configData.mcpServers[serverKey] = {
-              command: 'npx',
-              args: ['-y', selectedPkg.name]
-            };
-          } else {
-            configData.mcpServers[serverKey] = {
-              command: selectedPkg.name,
-              args: []
-            };
+          const entry = {
+            command: executionMethod === 'npx' ? 'npx' : selectedPkg.name,
+            args: executionMethod === 'npx' ? ['-y', selectedPkg.name] : []
+          };
+
+          if (Object.keys(serverEnv).length > 0) {
+            entry.env = serverEnv;
           }
+
+          configData.mcpServers[serverKey] = entry;
 
           await saveConfig(targetConfigPath, configData);
           configSpinner.succeed(pc.green(`Config saved to ${targetConfigPath}`));
@@ -1099,7 +1296,7 @@ async function main() {
     .name('antigravity-mcp-installer')
     .alias('agy-mcp')
     .description('Interactive MCP server installer & manager for Antigravity CLI')
-    .version('1.5.1')
+    .version('1.6.0')
     .argument('[query]', 'Search term to install a server (e.g. filesystem, postgres, github)')
     .option('-c, --config <path>', 'Custom path to mcp_config.json')
     .option('-m, --manage', 'Open MCP server management menu directly')
@@ -1113,7 +1310,6 @@ async function main() {
 
   printBanner();
 
-  // If flags provided, run that single command and exit
   if (options.audit) {
     await auditAllInstalledServers();
     return;
@@ -1129,7 +1325,6 @@ async function main() {
     return;
   }
 
-  // Interactive Main Menu Loop
   while (true) {
     const mainActionAns = await promptWithEsc([
       {
@@ -1142,7 +1337,7 @@ async function main() {
             value: 'search'
           },
           {
-            name: `${pc.bold('📋 Manage Installed Servers')} ${pc.dim('(Inspect, audit vulnerabilities, or remove)')}`,
+            name: `${pc.bold('📋 Manage Installed Servers')} ${pc.dim('(Inspect, configure API keys, audit, or remove)')}`,
             value: 'manage'
           },
           {
