@@ -228,14 +228,16 @@ async function performSecurityAssessment(pkg) {
 }
 
 /**
- * Search MCP servers via npm registry API and sort by popularity (weekly downloads)
+ * Search MCP servers via npm registry API and rank by Term Relevance + Download Popularity
  */
 async function searchNpmMcpServers(searchTerm) {
   const sanitizedTerm = searchTerm.trim().replace(/[\r\n\0]/g, '');
   if (!sanitizedTerm) return [];
 
+  const lowerTerm = sanitizedTerm.toLowerCase();
+
   const spinner = ora({
-    text: `Searching npm registry for "${sanitizedTerm}"...`,
+    text: `Searching npm registry for "${sanitizedTerm}" MCP servers...`,
     color: 'cyan'
   }).start();
 
@@ -277,9 +279,65 @@ async function searchNpmMcpServers(searchTerm) {
       return [];
     }
 
-    // Map and SORT BY POPULARITY (weekly downloads descending)
-    const results = data.objects
-      .filter(item => item?.package?.name && VALID_NPM_PACKAGE_NAME.test(item.package.name))
+    // 1. FILTER: Package must be related to MCP AND match the searched term
+    const candidates = data.objects.filter(item => {
+      const pkg = item.package;
+      if (!pkg?.name || !VALID_NPM_PACKAGE_NAME.test(pkg.name)) return false;
+
+      const name = (pkg.name || '').toLowerCase();
+      const desc = (pkg.description || '').toLowerCase();
+      const keywords = (pkg.keywords || []).map(k => String(k).toLowerCase());
+
+      const matchesTerm = name.includes(lowerTerm) || keywords.some(k => k.includes(lowerTerm)) || desc.includes(lowerTerm);
+      const isMcp = name.includes('mcp') || keywords.some(k => k.includes('mcp')) || desc.includes('mcp') || desc.includes('model context protocol');
+
+      return matchesTerm && isMcp;
+    });
+
+    // If strict filter yields 0 results (unusual query), fallback to all valid results that mention MCP
+    const pool = candidates.length > 0 ? candidates : data.objects.filter(item => {
+      const pkg = item.package;
+      if (!pkg?.name || !VALID_NPM_PACKAGE_NAME.test(pkg.name)) return false;
+      const name = (pkg.name || '').toLowerCase();
+      const desc = (pkg.description || '').toLowerCase();
+      const keywords = (pkg.keywords || []).map(k => String(k).toLowerCase());
+      return name.includes('mcp') || keywords.some(k => k.includes('mcp')) || desc.includes('mcp');
+    });
+
+    // 2. RELEVANCE + POPULARITY RANKING
+    // Ensures packages matching the search term stay at the top, ranked by downloads among peers
+    function computeRank(item) {
+      const pkg = item.package;
+      const name = (pkg.name || '').toLowerCase();
+      const desc = (pkg.description || '').toLowerCase();
+      const keywords = (pkg.keywords || []).map(k => String(k).toLowerCase());
+      const weekly = item.downloads?.weekly || 0;
+
+      let score = 0;
+
+      // Tier 1: Package name explicitly contains both search term and 'mcp'
+      if (name.includes(lowerTerm) && name.includes('mcp')) {
+        score += 10000000;
+      }
+      // Tier 2: Package name explicitly contains search term
+      else if (name.includes(lowerTerm)) {
+        score += 5000000;
+      }
+      // Tier 3: Keywords array explicitly contains search term
+      else if (keywords.some(k => k.includes(lowerTerm))) {
+        score += 2000000;
+      }
+      // Tier 4: Description contains search term
+      else if (desc.includes(lowerTerm)) {
+        score += 1000000;
+      }
+
+      // Add popularity within the relevance tier
+      score += weekly;
+      return score;
+    }
+
+    const sortedResults = pool
       .map(item => ({
         name: item.package.name,
         version: item.package.version || '0.0.0',
@@ -287,11 +345,12 @@ async function searchNpmMcpServers(searchTerm) {
         downloadsWeekly: item.downloads?.weekly || 0,
         downloadsMonthly: item.downloads?.monthly || 0,
         hasRepo: Boolean(item.package.links?.repository),
-        repoUrl: item.package.links?.repository || ''
+        repoUrl: item.package.links?.repository || '',
+        _rank: computeRank(item)
       }))
-      .sort((a, b) => (b.downloadsWeekly || 0) - (a.downloadsWeekly || 0));
+      .sort((a, b) => b._rank - a._rank);
 
-    return results;
+    return sortedResults;
   } catch (error) {
     spinner.fail(pc.red('Failed to reach npm registry.'));
     throw error;
@@ -383,8 +442,8 @@ async function main() {
   program
     .name('antigravity-mcp-installer')
     .alias('agy-mcp')
-    .description('Interactive MCP server installer with risk audit and popularity ranking')
-    .version('1.2.0')
+    .description('Interactive MCP server installer with risk audit and smart relevance ranking')
+    .version('1.2.1')
     .argument('[query]', 'Search term (e.g. filesystem, postgres, sqlite)')
     .option('-c, --config <path>', 'Explicit path to mcp_config.json')
     .parse(process.argv);
@@ -412,10 +471,10 @@ async function main() {
             {
               type: 'input',
               name: 'query',
-              message: 'Search MCP servers (sorted by popularity):',
+              message: 'Search MCP servers (e.g. github, filesystem, postgres):',
               validate: input => input.trim().length > 0 ? true : 'Please enter a search term.'
             }
-          ], false); // At root search, let Ctrl+C exit
+          ], false);
 
           query = ans.query;
         }
@@ -458,7 +517,7 @@ async function main() {
           {
             type: 'list',
             name: 'selected',
-            message: `Select an MCP server (${packages.length} found, ranked by downloads):`,
+            message: `Select an MCP server for "${query}" (${packages.length} found, ranked by relevance & downloads):`,
             choices,
             pageSize: 10
           }
