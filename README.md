@@ -1,6 +1,6 @@
 # antigravity-mcp-installer
 
-A lightweight CLI to discover MCP (Model Context Protocol) servers from npm and register them directly into Antigravity CLI's configuration (`~/.gemini/config/mcp_config.json`).
+A fast, interactive CLI to discover, security-audit, and install MCP (Model Context Protocol) servers into Antigravity CLI.
 
 Provides two terminal commands: `antigravity-mcp-installer` and `agy-mcp`.
 
@@ -35,28 +35,39 @@ agy-mcp postgres
 agy-mcp filesystem
 ```
 
-Specify a custom configuration file:
+Specify an explicit config file:
 ```bash
 agy-mcp git --config ./custom_mcp_config.json
 ```
 
-### Options
+## Key Capabilities
+
+### 1. Automated Security Risk Audit
+Every package is evaluated and cross-referenced in real-time against Google's **OSV (Open Source Vulnerabilities)** database (`api.osv.dev`) and npm registry telemetry:
+
+- **LOW RISK (🟢):** No active CVEs, verified source repository, high download volume, or official `@modelcontextprotocol` package.
+- **MEDIUM RISK (🟡):** Low download volume (<100/week) or missing source repository metadata.
+- **HIGH RISK (🔴):** Active unpatched CVEs found in vulnerability databases, or unvetted/suspicious packages. Requires explicit user confirmation to proceed.
+
+### 2. Global vs Private (Local) Configuration Scope
+Choose where the server is registered:
+- **Global:** Installed into `~/.gemini/config/mcp_config.json` (available across all your projects).
+- **Privado / Local:** Installed into `./.gemini/mcp_config.json` (scoped exclusively to your current project/repository).
+
+### 3. Flexible Execution
+- **`npx` (Recommended):** Zero local footprint, runs on-demand with `-y`.
+- **`npm install -g`:** Installs permanently on your system.
+
+## Options
 
 | Flag | Description | Default |
 |------|-------------|---------|
 | `[query]` | Package keyword to query npm registry | Prompts interactively |
-| `-c, --config <path>` | Path to `mcp_config.json` | `~/.gemini/config/mcp_config.json` |
+| `-c, --config <path>` | Explicit path to `mcp_config.json` | Prompts for Global vs Local |
 | `-V, --version` | Output version | |
 | `-h, --help` | Display help | |
 
-## How It Works
-
-1. Queries the npm registry API (`registry.npmjs.org/-/v1/search`) filtering for MCP packages matching your query.
-2. Lets you pick a server from the interactive terminal list.
-3. Asks whether to run via `npx` (recommended: zero disk footprint, executes on-demand) or install globally via `npm install -g`.
-4. Safely parses and updates `~/.gemini/config/mcp_config.json`, preserving existing entries and verifying JSON integrity.
-
-### Generated Config Example
+## Generated Config Example
 
 ```json
 {
@@ -72,12 +83,13 @@ agy-mcp git --config ./custom_mcp_config.json
 }
 ```
 
-## Security
+## Security Design
 
-- **No Shell Injection:** Package installation invokes `child_process.spawn` with argument arrays directly (`shell: false`). No shell concatenation.
-- **Package Name Validation:** All package candidates are validated against the official npm package naming specification.
-- **Prototype Pollution Prevention:** Server identifiers are sanitized and checked against reserved JavaScript properties (`__proto__`, `constructor`, `prototype`).
-- **Atomic Writes:** Configuration writes use temporary files and atomic rename operations to prevent partial file corruption.
+- **Vulnerability Scanning:** Live query to Google OSV database (`api.osv.dev`) for package advisories.
+- **No Shell Injection:** Executes `child_process.spawn` with argument arrays directly (`shell: false`).
+- **RFC Package Validation:** Rejects any input that does not conform strictly to npm naming standards.
+- **Prototype Pollution Defense:** Identifiers are checked against reserved properties (`__proto__`, `constructor`, `prototype`).
+- **Atomic Disk Writes:** Updates configs via temporary files and atomic rename operations.
 
 ## Local Development
 

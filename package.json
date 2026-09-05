@@ -1,6 +1,6 @@
 {
   "name": "antigravity-mcp-installer",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "CLI interactiva para buscar e instalar servidores MCP en Antigravity CLI",
   "type": "module",
   "bin": {
