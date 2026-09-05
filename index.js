@@ -23,10 +23,14 @@ const VALID_NPM_PACKAGE_NAME = /^(@[a-z0-9-~][a-z0-9-._~]*\/)?[a-z0-9-~][a-z0-9-
 // Protect against Prototype Pollution
 const FORBIDDEN_SERVER_KEYS = new Set(['__proto__', 'constructor', 'prototype']);
 
+// Sentinel value to identify when user requests to go back
+const BACK_SIGNAL = Symbol('BACK_SIGNAL');
+
 function printBanner() {
   console.log();
   console.log(pc.bold(pc.cyan('antigravity-mcp-installer')) + pc.dim(' (agy-mcp)'));
   console.log(pc.dim('Search, audit risk & configure MCP servers for Antigravity CLI'));
+  console.log(pc.dim('Tip: Press [Esc] at any menu to go back.'));
   console.log();
 }
 
@@ -57,6 +61,36 @@ function runCommand(command, args = []) {
       }
     });
   });
+}
+
+/**
+ * Inquirer wrapper with Escape key listener for backward navigation
+ */
+async function promptWithEsc(questionOrQuestions, allowEsc = true) {
+  const promptPromise = inquirer.prompt(questionOrQuestions);
+  let keyHandler;
+
+  if (allowEsc && promptPromise.ui?.abortController) {
+    keyHandler = (str, key) => {
+      if (key && (key.name === 'escape' || key.sequence === '\u001b')) {
+        promptPromise.ui.abortController.abort(BACK_SIGNAL);
+      }
+    };
+    process.stdin.on('keypress', keyHandler);
+  }
+
+  try {
+    return await promptPromise;
+  } catch (err) {
+    if (err.name === 'AbortPromptError' || promptPromise.ui?.abortController?.signal?.aborted) {
+      return BACK_SIGNAL;
+    }
+    throw err;
+  } finally {
+    if (keyHandler) {
+      process.stdin.removeListener('keypress', keyHandler);
+    }
+  }
 }
 
 /**
@@ -92,10 +126,9 @@ async function performSecurityAssessment(pkg) {
   }).start();
 
   const signals = [];
-  let score = 0; // Higher = riskier
+  let score = 0;
   let activeVulns = [];
 
-  // 1. Query Google OSV API for known CVEs
   try {
     const res = await fetch('https://api.osv.dev/v1/query', {
       method: 'POST',
@@ -114,13 +147,11 @@ async function performSecurityAssessment(pkg) {
     if (res.ok) {
       const data = await res.json();
       if (Array.isArray(data.vulns) && data.vulns.length > 0) {
-        // Check which vulnerabilities might affect current version
         for (const vuln of data.vulns) {
           const vulnId = vuln.aliases?.[0] || vuln.id;
           const severity = vuln.database_specific?.severity || 'MODERATE';
           
           let affected = true;
-          // Simple semver fixed check if available
           for (const aff of vuln.affected || []) {
             for (const r of aff.ranges || []) {
               if (r.type === 'SEMVER' && Array.isArray(r.events)) {
@@ -143,7 +174,6 @@ async function performSecurityAssessment(pkg) {
     signals.push('Could not reach OSV database (offline or blocked).');
   }
 
-  // 2. Community adoption & provenance
   const weekly = pkg.downloadsWeekly || 0;
   if (pkg.name.startsWith('@modelcontextprotocol/')) {
     signals.push('Official Model Context Protocol package scope');
@@ -158,7 +188,6 @@ async function performSecurityAssessment(pkg) {
     signals.push(`Moderate download volume (${weekly} weekly downloads)`);
   }
 
-  // 3. Source repository provenance
   if (pkg.hasRepo) {
     signals.push(`Source repository: ${pkg.repoUrl}`);
   } else {
@@ -179,7 +208,6 @@ async function performSecurityAssessment(pkg) {
     badge = pc.bold(pc.yellow('MEDIUM RISK (🟡)'));
   }
 
-  // Print Assessment Card
   console.log();
   console.log(pc.bold('─'.repeat(65)));
   console.log(` Security Assessment: ${badge}`);
@@ -200,7 +228,7 @@ async function performSecurityAssessment(pkg) {
 }
 
 /**
- * Search MCP servers via npm registry API
+ * Search MCP servers via npm registry API and sort by popularity (weekly downloads)
  */
 async function searchNpmMcpServers(searchTerm) {
   const sanitizedTerm = searchTerm.trim().replace(/[\r\n\0]/g, '');
@@ -213,7 +241,7 @@ async function searchNpmMcpServers(searchTerm) {
 
   try {
     let query = `${sanitizedTerm} mcp-server`;
-    let url = `https://registry.npmjs.org/-/v1/search?text=${encodeURIComponent(query)}&size=30`;
+    let url = `https://registry.npmjs.org/-/v1/search?text=${encodeURIComponent(query)}&size=50`;
 
     let response = await fetch(url, {
       headers: {
@@ -231,7 +259,7 @@ async function searchNpmMcpServers(searchTerm) {
     if (!data.objects || data.objects.length === 0) {
       spinner.text = 'Broadening query...';
       query = `${sanitizedTerm} mcp`;
-      url = `https://registry.npmjs.org/-/v1/search?text=${encodeURIComponent(query)}&size=30`;
+      url = `https://registry.npmjs.org/-/v1/search?text=${encodeURIComponent(query)}&size=50`;
       response = await fetch(url, {
         headers: {
           'Accept': 'application/json',
@@ -249,16 +277,21 @@ async function searchNpmMcpServers(searchTerm) {
       return [];
     }
 
-    return data.objects
+    // Map and SORT BY POPULARITY (weekly downloads descending)
+    const results = data.objects
       .filter(item => item?.package?.name && VALID_NPM_PACKAGE_NAME.test(item.package.name))
       .map(item => ({
         name: item.package.name,
         version: item.package.version || '0.0.0',
         description: item.package.description || 'No description available',
         downloadsWeekly: item.downloads?.weekly || 0,
+        downloadsMonthly: item.downloads?.monthly || 0,
         hasRepo: Boolean(item.package.links?.repository),
         repoUrl: item.package.links?.repository || ''
-      }));
+      }))
+      .sort((a, b) => (b.downloadsWeekly || 0) - (a.downloadsWeekly || 0));
+
+    return results;
   } catch (error) {
     spinner.fail(pc.red('Failed to reach npm registry.'));
     throw error;
@@ -350,222 +383,304 @@ async function main() {
   program
     .name('antigravity-mcp-installer')
     .alias('agy-mcp')
-    .description('Interactive MCP server installer with security risk audit for Antigravity CLI')
-    .version('1.1.0')
+    .description('Interactive MCP server installer with risk audit and popularity ranking')
+    .version('1.2.0')
     .argument('[query]', 'Search term (e.g. filesystem, postgres, sqlite)')
     .option('-c, --config <path>', 'Explicit path to mcp_config.json')
     .parse(process.argv);
 
   const options = program.opts();
-  let explicitConfigPath = options.config ? path.resolve(options.config) : null;
-  let query = program.args[0];
+  const explicitConfigPath = options.config ? path.resolve(options.config) : null;
+  let initialArgQuery = program.args[0] || '';
 
   printBanner();
 
-  if (!query) {
-    const answer = await inquirer.prompt([
-      {
-        type: 'input',
-        name: 'query',
-        message: 'Search MCP servers:',
-        validate: input => input.trim().length > 0 ? true : 'Please enter a search query.'
-      }
-    ]);
-    query = answer.query;
-  }
-
+  let state = 'SEARCH';
+  let query = initialArgQuery;
   let packages = [];
-  try {
-    packages = await searchNpmMcpServers(query);
-  } catch (err) {
-    console.error(pc.red(`Error: ${err.message}`));
-    process.exit(1);
-  }
-
-  if (packages.length === 0) {
-    console.log(pc.yellow(`No MCP servers found matching "${query}".`));
-    process.exit(0);
-  }
-
-  // 1. Interactive choice list with quick risk indicators
-  const choices = packages.map(pkg => {
-    const risk = evaluateQuickRisk(pkg);
-    const weeklyText = pkg.downloadsWeekly ? pc.dim(` (${pkg.downloadsWeekly.toLocaleString()} dl/wk)`) : '';
-    return {
-      name: `${pc.bold(pkg.name)} ${pc.dim(`v${pkg.version}`)} [${risk.label}]${weeklyText}\n  ${pc.dim(pkg.description)}`,
-      value: pkg
-    };
-  });
-
-  const { selectedPkg } = await inquirer.prompt([
-    {
-      type: 'list',
-      name: 'selectedPkg',
-      message: 'Select an MCP server to configure:',
-      choices,
-      pageSize: 10
-    }
-  ]);
-
-  if (!VALID_NPM_PACKAGE_NAME.test(selectedPkg.name)) {
-    console.error(pc.red('Security violation: Package name violates npm specification.'));
-    process.exit(1);
-  }
-
-  // 2. Perform Deep Security Risk Audit
-  const security = await performSecurityAssessment(selectedPkg);
-
-  if (security.level === 'HIGH' || security.level === 'MEDIUM') {
-    const { proceedWithRisk } = await inquirer.prompt([
-      {
-        type: 'confirm',
-        name: 'proceedWithRisk',
-        message: security.level === 'HIGH'
-          ? '⚠ WARNING: This package has elevated security risks. Proceed anyway?'
-          : 'Notice: This package has medium risk warnings. Proceed?',
-        default: security.level !== 'HIGH'
-      }
-    ]);
-
-    if (!proceedWithRisk) {
-      console.log(pc.yellow('\nInstallation aborted by user due to security risk.\n'));
-      process.exit(0);
-    }
-  }
-
-  // 3. Selection of Scope: Global vs Privado (Local Project)
+  let selectedPkg = null;
+  let security = null;
   let targetConfigPath = explicitConfigPath;
-  if (!targetConfigPath) {
-    const { scope } = await inquirer.prompt([
-      {
-        type: 'list',
-        name: 'scope',
-        message: '¿Dónde deseas configurar este servidor MCP?',
-        choices: [
+  let executionMethod = 'npx';
+  let serverKey = '';
+
+  while (state !== 'DONE') {
+    switch (state) {
+      case 'SEARCH': {
+        if (!query) {
+          const ans = await promptWithEsc([
+            {
+              type: 'input',
+              name: 'query',
+              message: 'Search MCP servers (sorted by popularity):',
+              validate: input => input.trim().length > 0 ? true : 'Please enter a search term.'
+            }
+          ], false); // At root search, let Ctrl+C exit
+
+          query = ans.query;
+        }
+
+        try {
+          packages = await searchNpmMcpServers(query);
+        } catch (err) {
+          console.error(pc.red(`Error: ${err.message}`));
+          query = '';
+          continue;
+        }
+
+        if (packages.length === 0) {
+          console.log(pc.yellow(`No MCP servers found for "${query}". Try another keyword.\n`));
+          query = '';
+          continue;
+        }
+
+        state = 'SELECT_PACKAGE';
+        break;
+      }
+
+      case 'SELECT_PACKAGE': {
+        const choices = packages.map(pkg => {
+          const risk = evaluateQuickRisk(pkg);
+          const dl = pkg.downloadsWeekly ? pc.cyan(`🔥 ${pkg.downloadsWeekly.toLocaleString()} dl/wk`) : pc.dim('0 dl/wk');
+          return {
+            name: `${pc.bold(pkg.name)} ${pc.dim(`v${pkg.version}`)} [${risk.label}] [${dl}]\n  ${pc.dim(pkg.description)}`,
+            value: pkg
+          };
+        });
+
+        choices.push(new inquirer.Separator());
+        choices.push({
+          name: pc.dim('← [Esc] Volver a buscar con otro término'),
+          value: BACK_SIGNAL
+        });
+
+        const ans = await promptWithEsc([
           {
-            name: `${pc.bold('Global')} ${pc.dim(`(Disponible en todos tus proyectos: ${GLOBAL_CONFIG_PATH})`)}`,
-            value: 'global'
-          },
-          {
-            name: `${pc.bold('Privado / Local')} ${pc.dim(`(Solo para este repositorio/proyecto: ./.gemini/mcp_config.json)`)}`,
-            value: 'local'
+            type: 'list',
+            name: 'selected',
+            message: `Select an MCP server (${packages.length} found, ranked by downloads):`,
+            choices,
+            pageSize: 10
           }
-        ]
+        ]);
+
+        if (ans === BACK_SIGNAL || ans.selected === BACK_SIGNAL) {
+          query = '';
+          state = 'SEARCH';
+          break;
+        }
+
+        selectedPkg = ans.selected;
+        state = 'AUDIT_RISK';
+        break;
       }
-    ]);
-    targetConfigPath = scope === 'global' ? GLOBAL_CONFIG_PATH : LOCAL_CONFIG_PATH;
-  }
 
-  // 4. Selection of Execution Method: npx vs npm install -g
-  const { executionMethod } = await inquirer.prompt([
-    {
-      type: 'list',
-      name: 'executionMethod',
-      message: '¿Cómo deseas ejecutarlo?',
-      choices: [
-        {
-          name: `${pc.bold('npx')} ${pc.dim('(Recomendado: se ejecuta bajo demanda sin instalación permanente)')}`,
-          value: 'npx'
-        },
-        {
-          name: `${pc.bold('npm install -g')} ${pc.dim('(Instalación global del binario en el sistema)')}`,
-          value: 'global'
+      case 'AUDIT_RISK': {
+        security = await performSecurityAssessment(selectedPkg);
+
+        if (security.level === 'HIGH' || security.level === 'MEDIUM') {
+          const ans = await promptWithEsc([
+            {
+              type: 'list',
+              name: 'action',
+              message: security.level === 'HIGH'
+                ? '⚠ WARNING: This server has elevated security warnings. What would you like to do?'
+                : 'Notice: This server has moderate security notes. What would you like to do?',
+              choices: [
+                { name: 'Proceed with configuration', value: 'proceed' },
+                { name: '← [Esc] Volver a la lista de servidores', value: 'back' }
+              ]
+            }
+          ]);
+
+          if (ans === BACK_SIGNAL || ans.action === 'back') {
+            state = 'SELECT_PACKAGE';
+            break;
+          }
         }
-      ]
-    }
-  ]);
 
-  if (executionMethod === 'global') {
-    const spinner = ora(`Running npm install -g ${selectedPkg.name}...`).start();
-    try {
-      await runCommand('npm', ['install', '-g', selectedPkg.name]);
-      spinner.succeed(`Package ${pc.bold(selectedPkg.name)} installed globally.`);
-    } catch (err) {
-      spinner.fail(pc.red('Global installation failed.'));
-      console.error(pc.dim(err.message));
+        state = explicitConfigPath ? 'SELECT_EXECUTION' : 'SELECT_SCOPE';
+        break;
+      }
 
-      const { continueAnyway } = await inquirer.prompt([
-        {
-          type: 'confirm',
-          name: 'continueAnyway',
-          message: 'Continue adding server configuration anyway?',
-          default: false
+      case 'SELECT_SCOPE': {
+        const ans = await promptWithEsc([
+          {
+            type: 'list',
+            name: 'scope',
+            message: '¿Dónde deseas configurar este servidor MCP?',
+            choices: [
+              {
+                name: `${pc.bold('Global')} ${pc.dim(`(Para todos tus proyectos: ${GLOBAL_CONFIG_PATH})`)}`,
+                value: 'global'
+              },
+              {
+                name: `${pc.bold('Privado / Local')} ${pc.dim(`(Solo para este repositorio: ./.gemini/mcp_config.json)`)}`,
+                value: 'local'
+              },
+              new inquirer.Separator(),
+              {
+                name: pc.dim('← [Esc] Volver'),
+                value: BACK_SIGNAL
+              }
+            ]
+          }
+        ]);
+
+        if (ans === BACK_SIGNAL || ans.scope === BACK_SIGNAL) {
+          state = 'SELECT_PACKAGE';
+          break;
         }
-      ]);
 
-      if (!continueAnyway) {
-        process.exit(1);
+        targetConfigPath = ans.scope === 'global' ? GLOBAL_CONFIG_PATH : LOCAL_CONFIG_PATH;
+        state = 'SELECT_EXECUTION';
+        break;
+      }
+
+      case 'SELECT_EXECUTION': {
+        const ans = await promptWithEsc([
+          {
+            type: 'list',
+            name: 'method',
+            message: '¿Cómo deseas ejecutar este servidor MCP?',
+            choices: [
+              {
+                name: `${pc.bold('npx')} ${pc.dim('(Recomendado: bajo demanda, sin ensuciar el sistema)')}`,
+                value: 'npx'
+              },
+              {
+                name: `${pc.bold('npm install -g')} ${pc.dim('(Instalación global del binario en el sistema)')}`,
+                value: 'global'
+              },
+              new inquirer.Separator(),
+              {
+                name: pc.dim('← [Esc] Volver'),
+                value: BACK_SIGNAL
+              }
+            ]
+          }
+        ]);
+
+        if (ans === BACK_SIGNAL || ans.method === BACK_SIGNAL) {
+          state = explicitConfigPath ? 'SELECT_PACKAGE' : 'SELECT_SCOPE';
+          break;
+        }
+
+        executionMethod = ans.method;
+
+        if (executionMethod === 'global') {
+          const spinner = ora(`Instalando ${selectedPkg.name} globalmente con npm...`).start();
+          try {
+            await runCommand('npm', ['install', '-g', selectedPkg.name]);
+            spinner.succeed(`Paquete ${pc.bold(selectedPkg.name)} instalado globalmente.`);
+          } catch (err) {
+            spinner.fail(pc.red('Fallo al instalar globalmente con npm.'));
+            console.error(pc.dim(err.message));
+
+            const fallback = await promptWithEsc([
+              {
+                type: 'confirm',
+                name: 'continueAnyway',
+                message: 'La instalación global falló. ¿Deseas continuar configurándolo de todas formas?',
+                default: false
+              }
+            ]);
+
+            if (fallback === BACK_SIGNAL || !fallback.continueAnyway) {
+              state = 'SELECT_EXECUTION';
+              break;
+            }
+          }
+        }
+
+        state = 'SET_KEY';
+        break;
+      }
+
+      case 'SET_KEY': {
+        const defaultKey = sanitizeServerKey(selectedPkg.name);
+        const ans = await promptWithEsc([
+          {
+            type: 'input',
+            name: 'serverKey',
+            message: 'Identificador para el servidor en Antigravity (o presiona [Esc] para volver):',
+            default: defaultKey,
+            validate: input => {
+              const trimmed = input.trim();
+              if (!trimmed) return 'Identifier cannot be empty.';
+              if (FORBIDDEN_SERVER_KEYS.has(trimmed.toLowerCase())) {
+                return `"${trimmed}" is a reserved property name.`;
+              }
+              if (!/^[a-zA-Z0-9_-]+$/.test(trimmed)) {
+                return 'Solo se permiten caracteres alfanuméricos, guiones y guiones bajos.';
+              }
+              return true;
+            }
+          }
+        ]);
+
+        if (ans === BACK_SIGNAL) {
+          state = 'SELECT_EXECUTION';
+          break;
+        }
+
+        serverKey = ans.serverKey;
+        state = 'SAVE';
+        break;
+      }
+
+      case 'SAVE': {
+        const configSpinner = ora(`Actualizando ${pc.dim(targetConfigPath)}...`).start();
+        try {
+          const configData = await loadOrCreateConfig(targetConfigPath);
+
+          if (Object.prototype.hasOwnProperty.call(configData.mcpServers, serverKey)) {
+            configSpinner.stop();
+            const overwriteAns = await promptWithEsc([
+              {
+                type: 'confirm',
+                name: 'overwrite',
+                message: `El servidor "${serverKey}" ya existe en la configuración. ¿Sobrescribir?`,
+                default: true
+              }
+            ]);
+
+            if (overwriteAns === BACK_SIGNAL || !overwriteAns.overwrite) {
+              console.log(pc.yellow('Operación de sobrescritura cancelada.'));
+              state = 'SET_KEY';
+              break;
+            }
+            configSpinner.start();
+          }
+
+          if (executionMethod === 'npx') {
+            configData.mcpServers[serverKey] = {
+              command: 'npx',
+              args: ['-y', selectedPkg.name]
+            };
+          } else {
+            configData.mcpServers[serverKey] = {
+              command: selectedPkg.name,
+              args: []
+            };
+          }
+
+          await saveConfig(targetConfigPath, configData);
+          configSpinner.succeed(pc.green(`Configuración guardada en ${targetConfigPath}`));
+
+          console.log();
+          console.log(pc.bold('Servidor MCP configurado exitosamente:'));
+          console.log(pc.white(JSON.stringify({ [serverKey]: configData.mcpServers[serverKey] }, null, 2)));
+          console.log(pc.dim('\nAntigravity CLI cargará este servidor automáticamente.\n'));
+          state = 'DONE';
+        } catch (err) {
+          configSpinner.fail(pc.red('Fallo al actualizar la configuración.'));
+          console.error(pc.red(`\n${err.message}`));
+          process.exit(1);
+        }
+        break;
       }
     }
-  }
-
-  // 5. Server identifier name
-  const defaultKey = sanitizeServerKey(selectedPkg.name);
-  const { serverKey } = await inquirer.prompt([
-    {
-      type: 'input',
-      name: 'serverKey',
-      message: 'Identificador del servidor en Antigravity:',
-      default: defaultKey,
-      validate: input => {
-        const trimmed = input.trim();
-        if (!trimmed) return 'Identifier cannot be empty.';
-        if (FORBIDDEN_SERVER_KEYS.has(trimmed.toLowerCase())) {
-          return `"${trimmed}" is a reserved prototype property and cannot be used.`;
-        }
-        if (!/^[a-zA-Z0-9_-]+$/.test(trimmed)) {
-          return 'Only alphanumeric characters, dashes, and underscores are allowed.';
-        }
-        return true;
-      }
-    }
-  ]);
-
-  // 6. Update target configuration
-  const configSpinner = ora(`Actualizando ${pc.dim(targetConfigPath)}...`).start();
-  try {
-    const configData = await loadOrCreateConfig(targetConfigPath);
-
-    if (Object.prototype.hasOwnProperty.call(configData.mcpServers, serverKey)) {
-      configSpinner.stop();
-      const { overwrite } = await inquirer.prompt([
-        {
-          type: 'confirm',
-          name: 'overwrite',
-          message: `El servidor "${serverKey}" ya existe en la configuración. ¿Sobrescribir?`,
-          default: true
-        }
-      ]);
-      if (!overwrite) {
-        console.log(pc.yellow('Operación cancelada.'));
-        process.exit(0);
-      }
-      configSpinner.start();
-    }
-
-    if (executionMethod === 'npx') {
-      configData.mcpServers[serverKey] = {
-        command: 'npx',
-        args: ['-y', selectedPkg.name]
-      };
-    } else {
-      configData.mcpServers[serverKey] = {
-        command: selectedPkg.name,
-        args: []
-      };
-    }
-
-    await saveConfig(targetConfigPath, configData);
-    configSpinner.succeed(pc.green(`Configuración guardada en ${targetConfigPath}`));
-
-    console.log();
-    console.log(pc.bold('Servidor MCP configurado exitosamente:'));
-    console.log(pc.white(JSON.stringify({ [serverKey]: configData.mcpServers[serverKey] }, null, 2)));
-    console.log(pc.dim('\nAntigravity CLI cargará este servidor automáticamente.\n'));
-  } catch (err) {
-    configSpinner.fail(pc.red('Fallo al actualizar la configuración.'));
-    console.error(pc.red(`\n${err.message}`));
-    process.exit(1);
   }
 }
 

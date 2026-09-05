@@ -23,6 +23,11 @@ irm https://raw.githubusercontent.com/hrnntz/antigravity-mcp-installer/main/inst
 npm install -g antigravity-mcp-installer
 ```
 
+### Direct on-demand execution (npx)
+```bash
+npx antigravity-mcp-installer
+```
+
 ## Usage
 
 Run interactive search:
@@ -44,19 +49,25 @@ agy-mcp git --config ./custom_mcp_config.json
 
 ## Key Capabilities
 
-### 1. Automated Security Risk Audit
+### 1. Ranked by Download Popularity
+Search results are automatically sorted from most downloaded to least downloaded, with visual weekly download counters (`🔥 1,366 dl/wk`) so you immediately spot the most battle-tested community implementations.
+
+### 2. Full Keyboard Navigation (`[Esc]` to Go Back)
+Made a mistake or want to choose another server? Press `[Esc]` (or select the `← Volver` option) at any step of the wizard to step backward without exiting the CLI.
+
+### 3. Automated Security Risk Audit
 Every package is evaluated and cross-referenced in real-time against Google's **OSV (Open Source Vulnerabilities)** database (`api.osv.dev`) and npm registry telemetry:
 
 - **LOW RISK (🟢):** No active CVEs, verified source repository, high download volume, or official `@modelcontextprotocol` package.
 - **MEDIUM RISK (🟡):** Low download volume (<100/week) or missing source repository metadata.
 - **HIGH RISK (🔴):** Active unpatched CVEs found in vulnerability databases, or unvetted/suspicious packages. Requires explicit user confirmation to proceed.
 
-### 2. Global vs Private (Local) Configuration Scope
+### 4. Global vs Private (Local) Configuration Scope
 Choose where the server is registered:
 - **Global:** Installed into `~/.gemini/config/mcp_config.json` (available across all your projects).
 - **Privado / Local:** Installed into `./.gemini/mcp_config.json` (scoped exclusively to your current project/repository).
 
-### 3. Flexible Execution
+### 5. Flexible Execution
 - **`npx` (Recommended):** Zero local footprint, runs on-demand with `-y`.
 - **`npm install -g`:** Installs permanently on your system.
 
