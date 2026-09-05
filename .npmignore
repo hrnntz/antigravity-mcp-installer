@@ -2,4 +2,5 @@ install.sh
 install.ps1
 .git
 .github
+test
 *.log

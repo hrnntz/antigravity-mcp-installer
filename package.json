@@ -8,8 +8,15 @@
     "agy-mcp": "index.js"
   },
   "main": "index.js",
+  "files": [
+    "index.js",
+    "src",
+    "LICENSE",
+    "README.md"
+  ],
   "scripts": {
-    "start": "node index.js"
+    "start": "node index.js",
+    "test": "node --test"
   },
   "repository": {
     "type": "git",
