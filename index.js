@@ -2,7 +2,7 @@
 
 /**
  * antigravity-mcp-installer
- * Interactive CLI to search, audit risk, and register MCP servers in Antigravity CLI.
+ * Interactive CLI to search, explain, audit risk, and register MCP servers in Antigravity CLI.
  */
 
 import { Command } from 'commander';
@@ -26,7 +26,7 @@ const FORBIDDEN_SERVER_KEYS = new Set(['__proto__', 'constructor', 'prototype'])
 // Sentinel value to identify when user requests to go back
 const BACK_SIGNAL = Symbol('BACK_SIGNAL');
 
-// Handle Ctrl+C (SIGINT) cleanly across all execution environments
+// Handle Ctrl+C (SIGINT) cleanly
 function handleExit() {
   console.log(pc.yellow('\n\nOperación cancelada por el usuario.'));
   process.exit(0);
@@ -38,7 +38,7 @@ process.on('SIGTERM', () => process.exit(0));
 function printBanner() {
   console.log();
   console.log(pc.bold(pc.cyan('antigravity-mcp-installer')) + pc.dim(' (agy-mcp)'));
-  console.log(pc.dim('Search, audit risk & configure MCP servers for Antigravity CLI'));
+  console.log(pc.dim('Search, explain & configure MCP servers for Antigravity CLI'));
   console.log(pc.dim('Tip: Press [Esc] to go back, or [Ctrl+C] to exit.'));
   console.log();
 }
@@ -81,11 +81,9 @@ async function promptWithEsc(questionOrQuestions, allowEsc = true) {
 
   if (promptPromise.ui?.abortController) {
     keyHandler = (str, key) => {
-      // Immediate exit on Ctrl+C
       if (key && key.ctrl && key.name === 'c') {
         handleExit();
       }
-      // Step back on Escape
       if (allowEsc && key && (key.name === 'escape' || key.sequence === '\u001b')) {
         promptPromise.ui.abortController.abort(BACK_SIGNAL);
       }
@@ -100,7 +98,6 @@ async function promptWithEsc(questionOrQuestions, allowEsc = true) {
       handleExit();
     }
 
-    // Only return BACK_SIGNAL if specifically aborted by Escape key
     if (promptPromise.ui?.abortController?.signal?.reason === BACK_SIGNAL) {
       return BACK_SIGNAL;
     }
@@ -137,20 +134,58 @@ function evaluateQuickRisk(pkg) {
 }
 
 /**
- * Deep security assessment querying Google OSV vulnerability database & registry stats
+ * Parse and extract bullet capabilities from package README
  */
-async function performSecurityAssessment(pkg) {
+function extractCapabilities(readmeText) {
+  if (!readmeText) return [];
+  const lines = readmeText.split('\n');
+  let capturing = false;
+  const capabilities = [];
+
+  for (const line of lines) {
+    const trimmed = line.trim();
+    if (/^#{1,3}\s+.*?(features|tools|capabilities|operations|overview|about|herramientas)/i.test(trimmed)) {
+      capturing = true;
+      continue;
+    }
+    if (capturing) {
+      if (/^#{1,2}\s+/.test(trimmed)) {
+        break;
+      }
+      if (trimmed.startsWith('-') || trimmed.startsWith('*')) {
+        const clean = trimmed
+          .replace(/^[-*]\s*/, '')
+          .replace(/\*\*/g, '')
+          .replace(/`([^`]+)`/g, '$1')
+          .trim();
+        if (clean && clean.length > 5 && capabilities.length < 5) {
+          capabilities.push(clean);
+        }
+      }
+    }
+  }
+  return capabilities;
+}
+
+/**
+ * Fetch package explanation and audit security in parallel
+ */
+async function fetchExplanationAndSecurity(pkg) {
   const spinner = ora({
-    text: `Auditing security for ${pkg.name} against Google OSV database...`,
+    text: `Consultando detalles y auditando seguridad para ${pc.bold(pkg.name)}...`,
     color: 'cyan'
   }).start();
 
   const signals = [];
   let score = 0;
   let activeVulns = [];
+  let fullDescription = pkg.description;
+  let capabilities = [];
+  let docsUrl = pkg.repoUrl || '';
 
-  try {
-    const res = await fetch('https://api.osv.dev/v1/query', {
+  // Parallel requests: Google OSV Vulnerability DB + npm Registry full metadata
+  const [osvResult, npmResult] = await Promise.allSettled([
+    fetch('https://api.osv.dev/v1/query', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -162,57 +197,76 @@ async function performSecurityAssessment(pkg) {
           ecosystem: 'npm'
         }
       })
-    });
+    }).then(r => r.ok ? r.json() : null),
 
-    if (res.ok) {
-      const data = await res.json();
-      if (Array.isArray(data.vulns) && data.vulns.length > 0) {
-        for (const vuln of data.vulns) {
-          const vulnId = vuln.aliases?.[0] || vuln.id;
-          const severity = vuln.database_specific?.severity || 'MODERATE';
-          
-          let affected = true;
-          for (const aff of vuln.affected || []) {
-            for (const r of aff.ranges || []) {
-              if (r.type === 'SEMVER' && Array.isArray(r.events)) {
-                const fixedEv = r.events.find(e => e.fixed);
-                if (fixedEv && pkg.version && pkg.version >= fixedEv.fixed) {
-                  affected = false;
-                }
-              }
+    fetch(`https://registry.npmjs.org/${encodeURIComponent(pkg.name)}`, {
+      headers: {
+        'Accept': 'application/json',
+        'User-Agent': 'antigravity-mcp-installer'
+      }
+    }).then(r => r.ok ? r.json() : null)
+  ]);
+
+  // Process npm package details
+  if (npmResult.status === 'fulfilled' && npmResult.value) {
+    const npmData = npmResult.value;
+    if (npmData.description) {
+      fullDescription = npmData.description;
+    }
+    if (npmData.homepage) {
+      docsUrl = npmData.homepage;
+    }
+    if (npmData.readme) {
+      capabilities = extractCapabilities(npmData.readme);
+    }
+  }
+
+  // Process OSV vulnerabilities
+  if (osvResult.status === 'fulfilled' && osvResult.value?.vulns) {
+    const vulns = osvResult.value.vulns;
+    for (const vuln of vulns) {
+      const vulnId = vuln.aliases?.[0] || vuln.id;
+      const severity = vuln.database_specific?.severity || 'MODERATE';
+      
+      let affected = true;
+      for (const aff of vuln.affected || []) {
+        for (const r of aff.ranges || []) {
+          if (r.type === 'SEMVER' && Array.isArray(r.events)) {
+            const fixedEv = r.events.find(e => e.fixed);
+            if (fixedEv && pkg.version && pkg.version >= fixedEv.fixed) {
+              affected = false;
             }
-          }
-
-          if (affected) {
-            activeVulns.push(`${vulnId} (${severity}) - ${vuln.summary || 'Security advisory'}`);
-            score += severity === 'HIGH' || severity === 'CRITICAL' ? 50 : 25;
           }
         }
       }
+
+      if (affected) {
+        activeVulns.push(`${vulnId} (${severity}) - ${vuln.summary || 'Aviso de seguridad'}`);
+        score += severity === 'HIGH' || severity === 'CRITICAL' ? 50 : 25;
+      }
     }
-  } catch (err) {
-    signals.push('Could not reach OSV database (offline or blocked).');
   }
 
+  // Telemetry signals
   const weekly = pkg.downloadsWeekly || 0;
   if (pkg.name.startsWith('@modelcontextprotocol/')) {
-    signals.push('Official Model Context Protocol package scope');
+    signals.push('Paquete oficial del scope Model Context Protocol');
     score = Math.max(0, score - 20);
   } else if (weekly > 500) {
-    signals.push(`High adoption (${weekly.toLocaleString()} weekly downloads)`);
+    signals.push(`Alta adopción comunitaria (${weekly.toLocaleString()} descargas/semana)`);
   } else if (weekly < 30) {
     score += 30;
-    signals.push(`Low download volume (${weekly} weekly downloads) - minimal community verification`);
+    signals.push(`Bajo volumen de descargas (${weekly} descargas/semana)`);
   } else {
     score += 10;
-    signals.push(`Moderate download volume (${weekly} weekly downloads)`);
+    signals.push(`Adopción moderada (${weekly} descargas/semana)`);
   }
 
   if (pkg.hasRepo) {
-    signals.push(`Source repository: ${pkg.repoUrl}`);
+    signals.push(`Código fuente público: ${pkg.repoUrl}`);
   } else {
     score += 25;
-    signals.push('No public source repository link declared in package metadata');
+    signals.push('No declara enlace a repositorio de código fuente en npm');
   }
 
   spinner.stop();
@@ -228,23 +282,42 @@ async function performSecurityAssessment(pkg) {
     badge = pc.bold(pc.yellow('MEDIUM RISK (🟡)'));
   }
 
+  // PRINT MCP EXPLANATION & AUDIT CARD
   console.log();
-  console.log(pc.bold('─'.repeat(65)));
-  console.log(` Security Assessment: ${badge}`);
-  console.log(pc.bold('─'.repeat(65)));
-  
+  console.log(pc.bold(pc.cyan('═'.repeat(68))));
+  console.log(` 📦 ${pc.bold(pkg.name)} ${pc.dim(`(v${pkg.version})`)}`);
+  console.log(pc.bold(pc.cyan('─'.repeat(68))));
+
+  console.log(pc.bold(' 📖 ¿Qué hace este servidor MCP?'));
+  console.log(pc.white(`   ${fullDescription}`));
+
+  if (capabilities.length > 0) {
+    console.log();
+    console.log(pc.bold(' 🛠️  Capacidades y funciones principales:'));
+    capabilities.forEach(cap => console.log(`   • ${pc.cyan(cap)}`));
+  }
+
+  if (docsUrl) {
+    console.log();
+    console.log(pc.dim(` 🌐 Documentación / Repo: ${docsUrl}`));
+  }
+
+  console.log(pc.bold(pc.cyan('─'.repeat(68))));
+  console.log(` 🛡️  Auditoría de Seguridad: ${badge}`);
+  console.log(pc.bold(pc.cyan('─'.repeat(68))));
+
   if (activeVulns.length > 0) {
-    console.log(pc.red(` Active Vulnerabilities Found (${activeVulns.length}):`));
+    console.log(pc.red(` ⚠ Vulnerabilidades activas encontradas (${activeVulns.length}):`));
     activeVulns.forEach(v => console.log(pc.red(`   • ${v}`)));
   } else {
-    console.log(pc.green('   • 0 active vulnerabilities reported in OSV database'));
+    console.log(pc.green('   • 0 vulnerabilidades conocidas en la base de datos Google OSV'));
   }
 
   signals.forEach(s => console.log(pc.dim(`   • ${s}`)));
-  console.log(pc.bold('─'.repeat(65)));
+  console.log(pc.bold(pc.cyan('═'.repeat(68))));
   console.log();
 
-  return { level, activeVulns };
+  return { level, activeVulns, fullDescription, capabilities };
 }
 
 /**
@@ -257,7 +330,7 @@ async function searchNpmMcpServers(searchTerm) {
   const lowerTerm = sanitizedTerm.toLowerCase();
 
   const spinner = ora({
-    text: `Searching npm registry for "${sanitizedTerm}" MCP servers...`,
+    text: `Buscando servidores MCP para "${sanitizedTerm}" en npm...`,
     color: 'cyan'
   }).start();
 
@@ -279,7 +352,7 @@ async function searchNpmMcpServers(searchTerm) {
     let data = await response.json();
 
     if (!data.objects || data.objects.length === 0) {
-      spinner.text = 'Broadening query...';
+      spinner.text = 'Ampliando búsqueda...';
       query = `${sanitizedTerm} mcp`;
       url = `https://registry.npmjs.org/-/v1/search?text=${encodeURIComponent(query)}&size=50`;
       response = await fetch(url, {
@@ -293,13 +366,12 @@ async function searchNpmMcpServers(searchTerm) {
       }
     }
 
-    spinner.succeed('Search completed.');
+    spinner.succeed('Búsqueda completada.');
 
     if (!Array.isArray(data.objects) || data.objects.length === 0) {
       return [];
     }
 
-    // 1. FILTER: Package must be related to MCP AND match the searched term
     const candidates = data.objects.filter(item => {
       const pkg = item.package;
       if (!pkg?.name || !VALID_NPM_PACKAGE_NAME.test(pkg.name)) return false;
@@ -323,7 +395,6 @@ async function searchNpmMcpServers(searchTerm) {
       return name.includes('mcp') || keywords.some(k => k.includes('mcp')) || desc.includes('mcp');
     });
 
-    // 2. RELEVANCE + POPULARITY RANKING
     function computeRank(item) {
       const pkg = item.package;
       const name = (pkg.name || '').toLowerCase();
@@ -351,7 +422,7 @@ async function searchNpmMcpServers(searchTerm) {
       .map(item => ({
         name: item.package.name,
         version: item.package.version || '0.0.0',
-        description: item.package.description || 'No description available',
+        description: item.package.description || 'Sin descripción disponible',
         downloadsWeekly: item.downloads?.weekly || 0,
         downloadsMonthly: item.downloads?.monthly || 0,
         hasRepo: Boolean(item.package.links?.repository),
@@ -362,7 +433,7 @@ async function searchNpmMcpServers(searchTerm) {
 
     return sortedResults;
   } catch (error) {
-    spinner.fail(pc.red('Failed to reach npm registry.'));
+    spinner.fail(pc.red('Fallo al conectar con el registro de npm.'));
     throw error;
   }
 }
@@ -378,7 +449,7 @@ async function loadOrCreateConfig(configPath) {
     await fs.mkdir(dirPath, { recursive: true });
   } catch (err) {
     if (err.code === 'EACCES') {
-      throw new Error(`Permission denied creating directory: ${dirPath}`);
+      throw new Error(`Permiso denegado al crear directorio: ${dirPath}`);
     }
     throw err;
   }
@@ -388,7 +459,7 @@ async function loadOrCreateConfig(configPath) {
     const parsed = JSON.parse(rawData);
 
     if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
-      throw new Error('Config file root must be a JSON object.');
+      throw new Error('La raíz del archivo de configuración debe ser un objeto JSON.');
     }
 
     if (!parsed.mcpServers || typeof parsed.mcpServers !== 'object' || Array.isArray(parsed.mcpServers)) {
@@ -404,11 +475,11 @@ async function loadOrCreateConfig(configPath) {
     }
 
     if (err instanceof SyntaxError) {
-      throw new Error(`Corrupted JSON in ${normalizedPath}: ${err.message}`);
+      throw new Error(`JSON corrupto en ${normalizedPath}: ${err.message}`);
     }
 
     if (err.code === 'EACCES') {
-      throw new Error(`Permission denied reading ${normalizedPath}`);
+      throw new Error(`Permiso denegado para leer ${normalizedPath}`);
     }
 
     throw err;
@@ -429,7 +500,7 @@ async function saveConfig(configPath, configData) {
   } catch (err) {
     try { await fs.unlink(tempPath); } catch {}
     if (err.code === 'EACCES') {
-      throw new Error(`Permission denied writing ${normalizedPath}`);
+      throw new Error(`Permiso denegado al escribir en ${normalizedPath}`);
     }
     throw err;
   }
@@ -452,10 +523,10 @@ async function main() {
   program
     .name('antigravity-mcp-installer')
     .alias('agy-mcp')
-    .description('Interactive MCP server installer with risk audit and smart relevance ranking')
-    .version('1.2.2')
-    .argument('[query]', 'Search term (e.g. filesystem, postgres, sqlite)')
-    .option('-c, --config <path>', 'Explicit path to mcp_config.json')
+    .description('Instalador interactivo de servidores MCP para Antigravity CLI')
+    .version('1.3.0')
+    .argument('[query]', 'Término de búsqueda (ej. filesystem, postgres, github, sqlite)')
+    .option('-c, --config <path>', 'Ruta personalizada a mcp_config.json')
     .parse(process.argv);
 
   const options = program.opts();
@@ -481,8 +552,8 @@ async function main() {
             {
               type: 'input',
               name: 'query',
-              message: 'Search MCP servers (e.g. github, filesystem, postgres):',
-              validate: input => input.trim().length > 0 ? true : 'Please enter a search term.'
+              message: '¿Qué servidor MCP deseas buscar? (ej. github, postgres, filesystem):',
+              validate: input => input.trim().length > 0 ? true : 'Por favor ingresa un término de búsqueda.'
             }
           ], false);
 
@@ -498,7 +569,7 @@ async function main() {
         }
 
         if (packages.length === 0) {
-          console.log(pc.yellow(`No MCP servers found for "${query}". Try another keyword.\n`));
+          console.log(pc.yellow(`No se encontraron servidores MCP para "${query}". Intenta con otra palabra clave.\n`));
           query = '';
           continue;
         }
@@ -510,7 +581,7 @@ async function main() {
       case 'SELECT_PACKAGE': {
         const choices = packages.map(pkg => {
           const risk = evaluateQuickRisk(pkg);
-          const dl = pkg.downloadsWeekly ? pc.cyan(`🔥 ${pkg.downloadsWeekly.toLocaleString()} dl/wk`) : pc.dim('0 dl/wk');
+          const dl = pkg.downloadsWeekly ? pc.cyan(`🔥 ${pkg.downloadsWeekly.toLocaleString()} dl/sem`) : pc.dim('0 dl/sem');
           return {
             name: `${pc.bold(pkg.name)} ${pc.dim(`v${pkg.version}`)} [${risk.label}] [${dl}]\n  ${pc.dim(pkg.description)}`,
             value: pkg
@@ -527,7 +598,7 @@ async function main() {
           {
             type: 'list',
             name: 'selected',
-            message: `Select an MCP server for "${query}" (${packages.length} found, ranked by relevance & downloads):`,
+            message: `Selecciona un servidor MCP para "${query}" (${packages.length} encontrados, ordenados por afinidad y descargas):`,
             choices,
             pageSize: 10
           }
@@ -545,27 +616,33 @@ async function main() {
       }
 
       case 'AUDIT_RISK': {
-        security = await performSecurityAssessment(selectedPkg);
+        // Obtains full explanation & runs Google OSV security audit
+        security = await fetchExplanationAndSecurity(selectedPkg);
 
-        if (security.level === 'HIGH' || security.level === 'MEDIUM') {
-          const ans = await promptWithEsc([
-            {
-              type: 'list',
-              name: 'action',
-              message: security.level === 'HIGH'
-                ? '⚠ WARNING: This server has elevated security warnings. What would you like to do?'
-                : 'Notice: This server has moderate security notes. What would you like to do?',
-              choices: [
-                { name: 'Proceed with configuration', value: 'proceed' },
-                { name: '← [Esc] Volver a la lista de servidores', value: 'back' }
-              ]
-            }
-          ]);
+        const choices = [
+          { name: pc.bold('Continuar con la configuración'), value: 'proceed' },
+          { name: pc.dim('← [Esc] Volver a la lista de servidores'), value: 'back' }
+        ];
 
-          if (ans === BACK_SIGNAL || ans.action === 'back') {
-            state = 'SELECT_PACKAGE';
-            break;
+        let msg = '¿Deseas configurar este servidor MCP?';
+        if (security.level === 'HIGH') {
+          msg = pc.red('⚠ ADVERTENCIA: Este servidor presenta riesgos de seguridad elevados. ¿Qué deseas hacer?');
+        } else if (security.level === 'MEDIUM') {
+          msg = pc.yellow('Nota: Este servidor tiene advertencias moderadas de seguridad. ¿Qué deseas hacer?');
+        }
+
+        const ans = await promptWithEsc([
+          {
+            type: 'list',
+            name: 'action',
+            message: msg,
+            choices
           }
+        ]);
+
+        if (ans === BACK_SIGNAL || ans.action === 'back') {
+          state = 'SELECT_PACKAGE';
+          break;
         }
 
         state = explicitConfigPath ? 'SELECT_EXECUTION' : 'SELECT_SCOPE';
@@ -597,7 +674,7 @@ async function main() {
         ]);
 
         if (ans === BACK_SIGNAL || ans.scope === BACK_SIGNAL) {
-          state = 'SELECT_PACKAGE';
+          state = 'AUDIT_RISK';
           break;
         }
 
@@ -631,7 +708,7 @@ async function main() {
         ]);
 
         if (ans === BACK_SIGNAL || ans.method === BACK_SIGNAL) {
-          state = explicitConfigPath ? 'SELECT_PACKAGE' : 'SELECT_SCOPE';
+          state = explicitConfigPath ? 'AUDIT_RISK' : 'SELECT_SCOPE';
           break;
         }
 
@@ -676,9 +753,9 @@ async function main() {
             default: defaultKey,
             validate: input => {
               const trimmed = input.trim();
-              if (!trimmed) return 'Identifier cannot be empty.';
+              if (!trimmed) return 'El identificador no puede estar vacío.';
               if (FORBIDDEN_SERVER_KEYS.has(trimmed.toLowerCase())) {
-                return `"${trimmed}" is a reserved property name.`;
+                return `"${trimmed}" es un nombre de propiedad reservado.`;
               }
               if (!/^[a-zA-Z0-9_-]+$/.test(trimmed)) {
                 return 'Solo se permiten caracteres alfanuméricos, guiones y guiones bajos.';
