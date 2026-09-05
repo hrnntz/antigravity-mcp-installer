@@ -28,7 +28,7 @@ const BACK_SIGNAL = Symbol('BACK_SIGNAL');
 
 // Handle Ctrl+C (SIGINT) cleanly
 function handleExit() {
-  console.log(pc.yellow('\n\nOperación cancelada por el usuario.'));
+  console.log(pc.yellow('\n\nOperation cancelled by user.'));
   process.exit(0);
 }
 
@@ -144,7 +144,7 @@ function extractCapabilities(readmeText) {
 
   for (const line of lines) {
     const trimmed = line.trim();
-    if (/^#{1,3}\s+.*?(features|tools|capabilities|operations|overview|about|herramientas)/i.test(trimmed)) {
+    if (/^#{1,3}\s+.*?(features|tools|capabilities|operations|overview|about)/i.test(trimmed)) {
       capturing = true;
       continue;
     }
@@ -172,7 +172,7 @@ function extractCapabilities(readmeText) {
  */
 async function fetchExplanationAndSecurity(pkg) {
   const spinner = ora({
-    text: `Consultando detalles y auditando seguridad para ${pc.bold(pkg.name)}...`,
+    text: `Fetching details and auditing security for ${pc.bold(pkg.name)}...`,
     color: 'cyan'
   }).start();
 
@@ -241,7 +241,7 @@ async function fetchExplanationAndSecurity(pkg) {
       }
 
       if (affected) {
-        activeVulns.push(`${vulnId} (${severity}) - ${vuln.summary || 'Aviso de seguridad'}`);
+        activeVulns.push(`${vulnId} (${severity}) - ${vuln.summary || 'Security advisory'}`);
         score += severity === 'HIGH' || severity === 'CRITICAL' ? 50 : 25;
       }
     }
@@ -250,23 +250,23 @@ async function fetchExplanationAndSecurity(pkg) {
   // Telemetry signals
   const weekly = pkg.downloadsWeekly || 0;
   if (pkg.name.startsWith('@modelcontextprotocol/')) {
-    signals.push('Paquete oficial del scope Model Context Protocol');
+    signals.push('Official Model Context Protocol scope package');
     score = Math.max(0, score - 20);
   } else if (weekly > 500) {
-    signals.push(`Alta adopción comunitaria (${weekly.toLocaleString()} descargas/semana)`);
+    signals.push(`High community adoption (${weekly.toLocaleString()} dl/week)`);
   } else if (weekly < 30) {
     score += 30;
-    signals.push(`Bajo volumen de descargas (${weekly} descargas/semana)`);
+    signals.push(`Low download volume (${weekly} dl/week)`);
   } else {
     score += 10;
-    signals.push(`Adopción moderada (${weekly} descargas/semana)`);
+    signals.push(`Moderate adoption (${weekly} dl/week)`);
   }
 
   if (pkg.hasRepo) {
-    signals.push(`Código fuente público: ${pkg.repoUrl}`);
+    signals.push(`Public repository: ${pkg.repoUrl}`);
   } else {
     score += 25;
-    signals.push('No declara enlace a repositorio de código fuente en npm');
+    signals.push('No public source repository declared in npm metadata');
   }
 
   spinner.stop();
@@ -288,29 +288,29 @@ async function fetchExplanationAndSecurity(pkg) {
   console.log(` 📦 ${pc.bold(pkg.name)} ${pc.dim(`(v${pkg.version})`)}`);
   console.log(pc.bold(pc.cyan('─'.repeat(68))));
 
-  console.log(pc.bold(' 📖 ¿Qué hace este servidor MCP?'));
+  console.log(pc.bold(' 📖 What does this MCP server do?'));
   console.log(pc.white(`   ${fullDescription}`));
 
   if (capabilities.length > 0) {
     console.log();
-    console.log(pc.bold(' 🛠️  Capacidades y funciones principales:'));
+    console.log(pc.bold(' 🛠️  Key Capabilities & Tools:'));
     capabilities.forEach(cap => console.log(`   • ${pc.cyan(cap)}`));
   }
 
   if (docsUrl) {
     console.log();
-    console.log(pc.dim(` 🌐 Documentación / Repo: ${docsUrl}`));
+    console.log(pc.dim(` 🌐 Documentation / Repo: ${docsUrl}`));
   }
 
   console.log(pc.bold(pc.cyan('─'.repeat(68))));
-  console.log(` 🛡️  Auditoría de Seguridad: ${badge}`);
+  console.log(` 🛡️  Security Risk Assessment: ${badge}`);
   console.log(pc.bold(pc.cyan('─'.repeat(68))));
 
   if (activeVulns.length > 0) {
-    console.log(pc.red(` ⚠ Vulnerabilidades activas encontradas (${activeVulns.length}):`));
+    console.log(pc.red(` ⚠ Active vulnerabilities found (${activeVulns.length}):`));
     activeVulns.forEach(v => console.log(pc.red(`   • ${v}`)));
   } else {
-    console.log(pc.green('   • 0 vulnerabilidades conocidas en la base de datos Google OSV'));
+    console.log(pc.green('   • 0 known vulnerabilities in Google OSV database'));
   }
 
   signals.forEach(s => console.log(pc.dim(`   • ${s}`)));
@@ -330,7 +330,7 @@ async function searchNpmMcpServers(searchTerm) {
   const lowerTerm = sanitizedTerm.toLowerCase();
 
   const spinner = ora({
-    text: `Buscando servidores MCP para "${sanitizedTerm}" en npm...`,
+    text: `Searching npm registry for "${sanitizedTerm}" MCP servers...`,
     color: 'cyan'
   }).start();
 
@@ -352,7 +352,7 @@ async function searchNpmMcpServers(searchTerm) {
     let data = await response.json();
 
     if (!data.objects || data.objects.length === 0) {
-      spinner.text = 'Ampliando búsqueda...';
+      spinner.text = 'Broadening search...';
       query = `${sanitizedTerm} mcp`;
       url = `https://registry.npmjs.org/-/v1/search?text=${encodeURIComponent(query)}&size=50`;
       response = await fetch(url, {
@@ -366,7 +366,7 @@ async function searchNpmMcpServers(searchTerm) {
       }
     }
 
-    spinner.succeed('Búsqueda completada.');
+    spinner.succeed('Search completed.');
 
     if (!Array.isArray(data.objects) || data.objects.length === 0) {
       return [];
@@ -422,7 +422,7 @@ async function searchNpmMcpServers(searchTerm) {
       .map(item => ({
         name: item.package.name,
         version: item.package.version || '0.0.0',
-        description: item.package.description || 'Sin descripción disponible',
+        description: item.package.description || 'No description available',
         downloadsWeekly: item.downloads?.weekly || 0,
         downloadsMonthly: item.downloads?.monthly || 0,
         hasRepo: Boolean(item.package.links?.repository),
@@ -433,7 +433,7 @@ async function searchNpmMcpServers(searchTerm) {
 
     return sortedResults;
   } catch (error) {
-    spinner.fail(pc.red('Fallo al conectar con el registro de npm.'));
+    spinner.fail(pc.red('Failed to reach npm registry.'));
     throw error;
   }
 }
@@ -449,7 +449,7 @@ async function loadOrCreateConfig(configPath) {
     await fs.mkdir(dirPath, { recursive: true });
   } catch (err) {
     if (err.code === 'EACCES') {
-      throw new Error(`Permiso denegado al crear directorio: ${dirPath}`);
+      throw new Error(`Permission denied creating directory: ${dirPath}`);
     }
     throw err;
   }
@@ -459,7 +459,7 @@ async function loadOrCreateConfig(configPath) {
     const parsed = JSON.parse(rawData);
 
     if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
-      throw new Error('La raíz del archivo de configuración debe ser un objeto JSON.');
+      throw new Error('Config file root must be a JSON object.');
     }
 
     if (!parsed.mcpServers || typeof parsed.mcpServers !== 'object' || Array.isArray(parsed.mcpServers)) {
@@ -475,11 +475,11 @@ async function loadOrCreateConfig(configPath) {
     }
 
     if (err instanceof SyntaxError) {
-      throw new Error(`JSON corrupto en ${normalizedPath}: ${err.message}`);
+      throw new Error(`Corrupted JSON in ${normalizedPath}: ${err.message}`);
     }
 
     if (err.code === 'EACCES') {
-      throw new Error(`Permiso denegado para leer ${normalizedPath}`);
+      throw new Error(`Permission denied reading ${normalizedPath}`);
     }
 
     throw err;
@@ -500,7 +500,7 @@ async function saveConfig(configPath, configData) {
   } catch (err) {
     try { await fs.unlink(tempPath); } catch {}
     if (err.code === 'EACCES') {
-      throw new Error(`Permiso denegado al escribir en ${normalizedPath}`);
+      throw new Error(`Permission denied writing ${normalizedPath}`);
     }
     throw err;
   }
@@ -523,10 +523,10 @@ async function main() {
   program
     .name('antigravity-mcp-installer')
     .alias('agy-mcp')
-    .description('Instalador interactivo de servidores MCP para Antigravity CLI')
-    .version('1.3.0')
-    .argument('[query]', 'Término de búsqueda (ej. filesystem, postgres, github, sqlite)')
-    .option('-c, --config <path>', 'Ruta personalizada a mcp_config.json')
+    .description('Interactive MCP server installer for Antigravity CLI')
+    .version('1.4.0')
+    .argument('[query]', 'Search term (e.g. filesystem, postgres, github, sqlite)')
+    .option('-c, --config <path>', 'Custom path to mcp_config.json')
     .parse(process.argv);
 
   const options = program.opts();
@@ -552,8 +552,8 @@ async function main() {
             {
               type: 'input',
               name: 'query',
-              message: '¿Qué servidor MCP deseas buscar? (ej. github, postgres, filesystem):',
-              validate: input => input.trim().length > 0 ? true : 'Por favor ingresa un término de búsqueda.'
+              message: 'What MCP server are you looking for? (e.g. github, postgres, filesystem):',
+              validate: input => input.trim().length > 0 ? true : 'Please enter a search term.'
             }
           ], false);
 
@@ -569,7 +569,7 @@ async function main() {
         }
 
         if (packages.length === 0) {
-          console.log(pc.yellow(`No se encontraron servidores MCP para "${query}". Intenta con otra palabra clave.\n`));
+          console.log(pc.yellow(`No MCP servers found for "${query}". Try another keyword.\n`));
           query = '';
           continue;
         }
@@ -581,7 +581,7 @@ async function main() {
       case 'SELECT_PACKAGE': {
         const choices = packages.map(pkg => {
           const risk = evaluateQuickRisk(pkg);
-          const dl = pkg.downloadsWeekly ? pc.cyan(`🔥 ${pkg.downloadsWeekly.toLocaleString()} dl/sem`) : pc.dim('0 dl/sem');
+          const dl = pkg.downloadsWeekly ? pc.cyan(`🔥 ${pkg.downloadsWeekly.toLocaleString()} dl/wk`) : pc.dim('0 dl/wk');
           return {
             name: `${pc.bold(pkg.name)} ${pc.dim(`v${pkg.version}`)} [${risk.label}] [${dl}]\n  ${pc.dim(pkg.description)}`,
             value: pkg
@@ -590,7 +590,7 @@ async function main() {
 
         choices.push(new inquirer.Separator());
         choices.push({
-          name: pc.dim('← [Esc] Volver a buscar con otro término'),
+          name: pc.dim('← [Esc] Search again with a different term'),
           value: BACK_SIGNAL
         });
 
@@ -598,7 +598,7 @@ async function main() {
           {
             type: 'list',
             name: 'selected',
-            message: `Selecciona un servidor MCP para "${query}" (${packages.length} encontrados, ordenados por afinidad y descargas):`,
+            message: `Select an MCP server for "${query}" (${packages.length} found, ranked by relevance & downloads):`,
             choices,
             pageSize: 10
           }
@@ -616,19 +616,18 @@ async function main() {
       }
 
       case 'AUDIT_RISK': {
-        // Obtains full explanation & runs Google OSV security audit
         security = await fetchExplanationAndSecurity(selectedPkg);
 
         const choices = [
-          { name: pc.bold('Continuar con la configuración'), value: 'proceed' },
-          { name: pc.dim('← [Esc] Volver a la lista de servidores'), value: 'back' }
+          { name: pc.bold('Proceed with configuration'), value: 'proceed' },
+          { name: pc.dim('← [Esc] Back to server list'), value: 'back' }
         ];
 
-        let msg = '¿Deseas configurar este servidor MCP?';
+        let msg = 'Do you want to configure this MCP server?';
         if (security.level === 'HIGH') {
-          msg = pc.red('⚠ ADVERTENCIA: Este servidor presenta riesgos de seguridad elevados. ¿Qué deseas hacer?');
+          msg = pc.red('⚠ WARNING: This server has elevated security warnings. What would you like to do?');
         } else if (security.level === 'MEDIUM') {
-          msg = pc.yellow('Nota: Este servidor tiene advertencias moderadas de seguridad. ¿Qué deseas hacer?');
+          msg = pc.yellow('Notice: This server has moderate security notes. What would you like to do?');
         }
 
         const ans = await promptWithEsc([
@@ -654,19 +653,19 @@ async function main() {
           {
             type: 'list',
             name: 'scope',
-            message: '¿Dónde deseas configurar este servidor MCP?',
+            message: 'Where do you want to configure this MCP server?',
             choices: [
               {
-                name: `${pc.bold('Global')} ${pc.dim(`(Para todos tus proyectos: ${GLOBAL_CONFIG_PATH})`)}`,
+                name: `${pc.bold('Global')} ${pc.dim(`(Available across all your projects: ${GLOBAL_CONFIG_PATH})`)}`,
                 value: 'global'
               },
               {
-                name: `${pc.bold('Privado / Local')} ${pc.dim(`(Solo para este repositorio: ./.gemini/mcp_config.json)`)}`,
+                name: `${pc.bold('Private / Local')} ${pc.dim(`(Exclusive to this repository: ./.gemini/mcp_config.json)`)}`,
                 value: 'local'
               },
               new inquirer.Separator(),
               {
-                name: pc.dim('← [Esc] Volver'),
+                name: pc.dim('← [Esc] Back'),
                 value: BACK_SIGNAL
               }
             ]
@@ -688,19 +687,19 @@ async function main() {
           {
             type: 'list',
             name: 'method',
-            message: '¿Cómo deseas ejecutar este servidor MCP?',
+            message: 'How do you want to run this MCP server?',
             choices: [
               {
-                name: `${pc.bold('npx')} ${pc.dim('(Recomendado: bajo demanda, sin ensuciar el sistema)')}`,
+                name: `${pc.bold('npx')} ${pc.dim('(Recommended: on-demand execution, zero system clutter)')}`,
                 value: 'npx'
               },
               {
-                name: `${pc.bold('npm install -g')} ${pc.dim('(Instalación global del binario en el sistema)')}`,
+                name: `${pc.bold('npm install -g')} ${pc.dim('(Permanent global binary installation on system)')}`,
                 value: 'global'
               },
               new inquirer.Separator(),
               {
-                name: pc.dim('← [Esc] Volver'),
+                name: pc.dim('← [Esc] Back'),
                 value: BACK_SIGNAL
               }
             ]
@@ -715,19 +714,19 @@ async function main() {
         executionMethod = ans.method;
 
         if (executionMethod === 'global') {
-          const spinner = ora(`Instalando ${selectedPkg.name} globalmente con npm...`).start();
+          const spinner = ora(`Installing ${selectedPkg.name} globally via npm...`).start();
           try {
             await runCommand('npm', ['install', '-g', selectedPkg.name]);
-            spinner.succeed(`Paquete ${pc.bold(selectedPkg.name)} instalado globalmente.`);
+            spinner.succeed(`Package ${pc.bold(selectedPkg.name)} installed globally.`);
           } catch (err) {
-            spinner.fail(pc.red('Fallo al instalar globalmente con npm.'));
+            spinner.fail(pc.red('Global installation via npm failed.'));
             console.error(pc.dim(err.message));
 
             const fallback = await promptWithEsc([
               {
                 type: 'confirm',
                 name: 'continueAnyway',
-                message: 'La instalación global falló. ¿Deseas continuar configurándolo de todas formas?',
+                message: 'Global installation failed. Do you want to continue configuring it anyway?',
                 default: false
               }
             ]);
@@ -749,16 +748,16 @@ async function main() {
           {
             type: 'input',
             name: 'serverKey',
-            message: 'Identificador para el servidor en Antigravity (o presiona [Esc] para volver):',
+            message: 'Server identifier name in Antigravity (or press [Esc] to go back):',
             default: defaultKey,
             validate: input => {
               const trimmed = input.trim();
-              if (!trimmed) return 'El identificador no puede estar vacío.';
+              if (!trimmed) return 'Identifier cannot be empty.';
               if (FORBIDDEN_SERVER_KEYS.has(trimmed.toLowerCase())) {
-                return `"${trimmed}" es un nombre de propiedad reservado.`;
+                return `"${trimmed}" is a reserved property name.`;
               }
               if (!/^[a-zA-Z0-9_-]+$/.test(trimmed)) {
-                return 'Solo se permiten caracteres alfanuméricos, guiones y guiones bajos.';
+                return 'Only alphanumeric characters, dashes, and underscores are allowed.';
               }
               return true;
             }
@@ -776,7 +775,7 @@ async function main() {
       }
 
       case 'SAVE': {
-        const configSpinner = ora(`Actualizando ${pc.dim(targetConfigPath)}...`).start();
+        const configSpinner = ora(`Updating ${pc.dim(targetConfigPath)}...`).start();
         try {
           const configData = await loadOrCreateConfig(targetConfigPath);
 
@@ -786,13 +785,13 @@ async function main() {
               {
                 type: 'confirm',
                 name: 'overwrite',
-                message: `El servidor "${serverKey}" ya existe en la configuración. ¿Sobrescribir?`,
+                message: `Server "${serverKey}" already exists in config. Overwrite?`,
                 default: true
               }
             ]);
 
             if (overwriteAns === BACK_SIGNAL || !overwriteAns.overwrite) {
-              console.log(pc.yellow('Operación de sobrescritura cancelada.'));
+              console.log(pc.yellow('Overwrite operation cancelled.'));
               state = 'SET_KEY';
               break;
             }
@@ -812,15 +811,15 @@ async function main() {
           }
 
           await saveConfig(targetConfigPath, configData);
-          configSpinner.succeed(pc.green(`Configuración guardada en ${targetConfigPath}`));
+          configSpinner.succeed(pc.green(`Config saved to ${targetConfigPath}`));
 
           console.log();
-          console.log(pc.bold('Servidor MCP configurado exitosamente:'));
+          console.log(pc.bold('MCP server configured successfully:'));
           console.log(pc.white(JSON.stringify({ [serverKey]: configData.mcpServers[serverKey] }, null, 2)));
-          console.log(pc.dim('\nAntigravity CLI cargará este servidor automáticamente.\n'));
+          console.log(pc.dim('\nAntigravity CLI will detect and load this server automatically.\n'));
           state = 'DONE';
         } catch (err) {
-          configSpinner.fail(pc.red('Fallo al actualizar la configuración.'));
+          configSpinner.fail(pc.red('Failed to update Antigravity config.'));
           console.error(pc.red(`\n${err.message}`));
           process.exit(1);
         }
