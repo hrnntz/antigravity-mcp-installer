@@ -1,5 +1,7 @@
 # antigravity-mcp-installer
 
+[![npm version](https://img.shields.io/npm/v/antigravity-mcp-installer.svg)](https://www.npmjs.com/package/antigravity-mcp-installer) [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+
 A fast, interactive CLI to discover, security-audit, and install MCP (Model Context Protocol) servers into Antigravity CLI.
 
 Provides two terminal commands: `antigravity-mcp-installer` and `agy-mcp`.
