@@ -4,65 +4,74 @@
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Node.js Version](https://img.shields.io/badge/node-%3E%3D18.0.0-brightgreen.svg)](https://nodejs.org/)
+[![Platform](https://img.shields.io/badge/platform-Linux%20%7C%20macOS%20%7C%20Windows-blue.svg)](https://github.com/hrnntz/antigravity-mcp-installer)
+
+Incluye dos comandos listos para usar en tu terminal:
+- **`agy-mcp`** *(alias corto y rápido)*
+- **`antigravity-mcp-installer`** *(nombre completo)*
+
+---
+
+## ⚡ Instalación en 1 Línea
+
+### En Linux y macOS (Terminal)
+Ejecuta el instalador automático:
+```bash
+curl -fsSL https://raw.githubusercontent.com/hrnntz/antigravity-mcp-installer/main/install.sh | bash
+```
+
+### En Windows (PowerShell)
+Abre PowerShell y ejecuta:
+```powershell
+irm https://raw.githubusercontent.com/hrnntz/antigravity-mcp-installer/main/install.ps1 | iex
+```
+
+### Vía npm (Global)
+```bash
+npm install -g antigravity-mcp-installer
+```
+
+---
+
+## 🚀 Uso Rápido
+
+### 1. Búsqueda Interactiva
+Abre el explorador interactivo:
+```bash
+agy-mcp
+```
+*(o también: `antigravity-mcp-installer`)*
+
+### 2. Buscar directamente un término
+```bash
+agy-mcp sqlite
+agy-mcp filesystem
+agy-mcp postgres
+agy-mcp git
+```
+
+### 3. Especificar archivo de configuración alternativo
+```bash
+agy-mcp brave-search -c /ruta/a/mi_config.json
+```
 
 ---
 
 ## ✨ Características
 
-- 🔍 **Búsqueda en tiempo real**: Consulta paquetes de servidores MCP directamente en el registro oficial de npm.
-- 🎯 **Selección interactiva**: Explora y selecciona con flechas en la terminal gracias a `inquirer`.
-- ⚡ **Ejecución flexible**: Elige entre ejecución ligera bajo demanda con `npx -y` o instalación global persistente con `npm install -g`.
-- 🛠️ **Configuración sin fricción**: Lee, inicializa y actualiza `~/.gemini/config/mcp_config.json` de forma segura, respetando la estructura existente y previniendo conflictos.
-- 🎨 **Diseño moderno**: Spinners dinámicos con `ora` y paleta de colores limpia con `picocolors`.
+- 🔍 **Búsqueda instantánea**: Consulta servidores MCP directamente en el registro oficial de npm.
+- 🎯 **Selección con teclado**: Explora los resultados con flechas y selecciona con `Enter`.
+- ⚡ **Modo de ejecución flexible**:
+  - `npx -y`: Ejecución liviana bajo demanda (recomendado, sin ensuciar tu sistema).
+  - `npm install -g`: Instalación global permanente.
+- 🛡️ **Edición segura**: Lee, valida y actualiza `mcp_config.json` manejando posibles errores de sintaxis JSON y confirmando si deseas sobrescribir entradas existentes.
+- 🌐 **Multiplataforma**: Funciona idénticamente en Linux, macOS y Windows.
 
 ---
 
-## 📦 Instalación
+## 📋 Configuración Generada
 
-### Opción 1: Clonar y enlazar localmente (Desarrollo)
-
-```bash
-git clone https://github.com/hrnntz/antigravity-mcp-installer.git
-cd antigravity-mcp-installer
-npm install
-npm link
-```
-
-### Opción 2: Ejecutar directamente con npx (una vez publicado en npm)
-
-```bash
-npx antigravity-mcp-installer
-```
-
----
-
-## 🚀 Uso
-
-### 1. Búsqueda interactiva
-Simplemente ejecuta el comando y la CLI te solicitará el término de búsqueda:
-```bash
-antigravity-mcp-installer
-```
-
-### 2. Búsqueda directa por argumento
-Puedes pasar el término que buscas directamente:
-```bash
-antigravity-mcp-installer sqlite
-antigravity-mcp-installer filesystem
-antigravity-mcp-installer postgres
-```
-
-### 3. Especificar una ruta de configuración personalizada
-Si utilizas un archivo de configuración distinto al estándar:
-```bash
-antigravity-mcp-installer git -c /ruta/personalizada/mcp_config.json
-```
-
----
-
-## 📋 Formato de Configuración Generado
-
-La herramienta registra los servidores dentro del bloque `mcpServers` en `~/.gemini/config/mcp_config.json`:
+La herramienta registra los servidores dentro de `mcpServers` en `~/.gemini/config/mcp_config.json`:
 
 ```json
 {
@@ -80,16 +89,6 @@ La herramienta registra los servidores dentro del bloque `mcpServers` en `~/.gem
 
 ---
 
-## 🛠️ Tecnologías
-
-- [Node.js](https://nodejs.org/) (ES Modules)
-- [Commander.js](https://github.com/tj/commander.js)
-- [Inquirer.js](https://github.com/SBoudrias/Inquirer.js)
-- [Ora](https://github.com/sindresorhus/ora)
-- [Picocolors](https://github.com/alexeyraspopov/picocolors)
-
----
-
 ## 📄 Licencia
 
-MIT © [Hernán](https://github.com/hrnntz)
+MIT © [Hernán Arteaga](https://github.com/hrnntz)

@@ -4,12 +4,21 @@
   "description": "CLI interactiva para buscar e instalar servidores MCP en Antigravity CLI",
   "type": "module",
   "bin": {
-    "antigravity-mcp-installer": "./index.js"
+    "antigravity-mcp-installer": "./index.js",
+    "agy-mcp": "./index.js"
   },
   "main": "index.js",
   "scripts": {
     "start": "node index.js"
   },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/hrnntz/antigravity-mcp-installer.git"
+  },
+  "bugs": {
+    "url": "https://github.com/hrnntz/antigravity-mcp-installer/issues"
+  },
+  "homepage": "https://github.com/hrnntz/antigravity-mcp-installer#readme",
   "keywords": [
     "antigravity",
     "mcp",
@@ -19,7 +28,7 @@
     "installer",
     "agentic"
   ],
-  "author": "Hernán",
+  "author": "Hernán Arteaga",
   "license": "MIT",
   "dependencies": {
     "commander": "^13.1.0",
